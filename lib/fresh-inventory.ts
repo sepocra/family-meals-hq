@@ -3,6 +3,8 @@ import type { InventoryCategory } from './ingredient-category'
 const STORAGE_KEY = 'family-meals-fresh-inventory'
 
 export type FreshInventoryItem = {
+  /** Set when loaded from Supabase (omit on new items until saved). */
+  id?: string
   name: string
   /** ISO date YYYY-MM-DD (local calendar day when added) */
   addedAt: string

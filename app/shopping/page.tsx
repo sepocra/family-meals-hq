@@ -2,15 +2,13 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import { getFreshInventory } from '../../lib/fresh-inventory'
+import type { FreshInventoryItem } from '../../lib/fresh-inventory'
 import { buildShoppingList, type ShoppingListByCategory } from '../../lib/shopping-list'
 import { fetchFreshIngredientsForRecipes } from '../../lib/shopping-meals'
+import { fetchUserFreshInventory } from '../../lib/user-inventory-db'
+import { fetchUserWeeklyMeals } from '../../lib/user-weekly-meals-db'
 import { supabase } from '../../lib/supabase'
-import {
-  formatWeeklyMealsRefreshed,
-  getSelectedMealIds,
-  getStoredWeeklyMeals,
-} from '../../lib/weekly-meals'
+import { formatWeeklyMealsRefreshed } from '../../lib/weekly-meals'
 
 function ShoppingColumn({
   title,
@@ -51,9 +49,21 @@ export default function ShoppingListPage() {
 
   const recompute = useCallback(async () => {
     setLoading(true)
-    const stored = getStoredWeeklyMeals()
-    const inventory = getFreshInventory()
-    const selectedIds = getSelectedMealIds()
+    let stored = null
+    try {
+      stored = await fetchUserWeeklyMeals(supabase)
+    } catch (err) {
+      console.error(err)
+    }
+
+    let inventory: FreshInventoryItem[] = []
+    try {
+      inventory = await fetchUserFreshInventory(supabase)
+    } catch (err) {
+      console.error(err)
+    }
+
+    const selectedIds = stored?.selectedIds ?? []
 
     if (!stored?.suggestions.length) {
       setList({ produce: [], meat: [] })

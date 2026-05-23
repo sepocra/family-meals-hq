@@ -4,12 +4,15 @@ import { useEffect, useState } from 'react'
 import type { InventoryCategory } from '../../lib/ingredient-category'
 import {
   formatAddedDate,
-  getFreshInventory,
   normalizeProduceName,
-  setFreshInventory,
   todayDateString,
   type FreshInventoryItem,
 } from '../../lib/fresh-inventory'
+import {
+  fetchUserFreshInventory,
+  replaceUserFreshInventory,
+} from '../../lib/user-inventory-db'
+import { supabase } from '../../lib/supabase'
 
 const inputClass =
   'border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400 dark:focus:border-gray-500 w-full'
@@ -81,17 +84,34 @@ export default function FreshInventoryPage() {
   const [draftMeat, setDraftMeat] = useState('')
   const [draftMeatQty, setDraftMeatQty] = useState('')
   const [hydrated, setHydrated] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [listOpen, setListOpen] = useState(true)
 
   useEffect(() => {
-    setItems(getFreshInventory())
-    setHydrated(true)
+    fetchUserFreshInventory(supabase)
+      .then(setItems)
+      .catch((err) => {
+        console.error(err)
+        setLoadError(
+          'Could not load inventory. Run docs/supabase-multi-user.sql in Supabase.'
+        )
+      })
+      .finally(() => setHydrated(true))
   }, [])
 
-  function persist(next: FreshInventoryItem[]) {
+  async function persist(next: FreshInventoryItem[]) {
     setItems(next)
-    setFreshInventory(next)
+    setSaving(true)
+    try {
+      await replaceUserFreshInventory(supabase, next)
+      setLoadError(null)
+    } catch (err) {
+      console.error(err)
+      setLoadError('Failed to save inventory.')
+    }
+    setSaving(false)
   }
 
   function addItem(
@@ -174,10 +194,14 @@ export default function FreshInventoryPage() {
           </div>
         )}
       </div>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-8">
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Add fruit & veg and meats above. Each item is dated when you add it — clear and refill when
         a new box arrives.
       </p>
+      {loadError && <p className="text-sm text-red-500 mb-4">{loadError}</p>}
+      {saving && (
+        <p className="text-xs text-gray-400 mb-4">Saving…</p>
+      )}
 
       {!hydrated ? (
         <p className="text-gray-400 dark:text-gray-500 text-sm">Loading...</p>

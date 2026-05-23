@@ -15,6 +15,12 @@ import {
   type CatalogIngredient,
   type IngredientBankCategory,
 } from '../../lib/ingredient-catalog'
+import {
+  createIngredientRequest,
+  fetchPendingIngredientRequestNames,
+  normalizeRequestName,
+} from '../../lib/ingredient-requests'
+import { useAuth } from '../../components/AuthProvider'
 import { isMeatIngredient } from '../../lib/ingredient-category'
 import { shortenRecipeUrl } from '../../lib/recipe-url'
 import { supabase } from '../../lib/supabase'
@@ -181,6 +187,7 @@ type IngredientRow = {
   catalogId: string | null
   catalogName: string | null
   matchError: string | null
+  bankRequestPending?: boolean
 }
 
 type RecipeFormState = {
@@ -261,6 +268,12 @@ type RecipeFormPanelProps = {
     bankName: string,
     category: IngredientBankCategory
   ) => Promise<string | null>
+  onRequestIngredient: (
+    index: number,
+    bankName: string,
+    category: IngredientBankCategory
+  ) => Promise<string | null>
+  isAdmin: boolean
   onSave: () => void
   onCancel: () => void
   onDelete?: () => void
@@ -293,6 +306,99 @@ function defaultBankCategory(
   if (rowIsPantry) return 'pantry'
   if (isMeatIngredient(bankName)) return 'meat'
   return 'fresh'
+}
+
+function RequestIngredientPanel({
+  row,
+  index,
+  onRequest,
+}: {
+  row: IngredientRow
+  index: number
+  onRequest: (
+    index: number,
+    bankName: string,
+    category: IngredientBankCategory
+  ) => Promise<string | null>
+}) {
+  const recipeLine = row.importLineText?.trim() || row.name.trim()
+  const [bankName, setBankName] = useState(() => suggestIngredientBankName(recipeLine))
+  const [category, setCategory] = useState<IngredientBankCategory>(() =>
+    defaultBankCategory(suggestIngredientBankName(recipeLine), row.isPantry)
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const suggested = suggestIngredientBankName(recipeLine)
+    setBankName(suggested)
+    setCategory(defaultBankCategory(suggested, row.isPantry))
+    setError(null)
+  }, [recipeLine, row.isPantry])
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+    setSaving(true)
+    const err = await onRequest(index, bankName, category)
+    setSaving(false)
+    if (err) setError(err)
+  }
+
+  if (row.bankRequestPending) {
+    return (
+      <p className="ml-9 mt-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+        Request sent — waiting for admin to add &ldquo;{bankName || suggestIngredientBankName(recipeLine)}&rdquo; to the ingredient bank.
+      </p>
+    )
+  }
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="ml-9 mt-1 flex flex-col gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3"
+    >
+      <p className="text-xs font-medium text-gray-600 dark:text-gray-300">
+        Request admin to add to ingredient bank
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+        <div className="flex-1 min-w-0 flex flex-col gap-1">
+          <label className="text-xs text-gray-500 dark:text-gray-400">Name</label>
+          <input
+            type="text"
+            value={bankName}
+            onChange={(e) => setBankName(e.target.value)}
+            placeholder="e.g. chicken thigh"
+            className={inputClass}
+          />
+        </div>
+        <div className="sm:w-36 shrink-0 flex flex-col gap-1">
+          <label className="text-xs text-gray-500 dark:text-gray-400">Category</label>
+          <select
+            value={category}
+            onChange={(e) =>
+              setCategory(e.target.value as IngredientBankCategory)
+            }
+            className={inputClass}
+          >
+            {INGREDIENT_BANK_CATEGORIES.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <button
+        type="submit"
+        disabled={saving || !bankName.trim()}
+        className="self-start text-sm font-medium bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 rounded-lg px-3 py-1.5 hover:bg-gray-700 dark:hover:bg-gray-300 disabled:opacity-50 transition-colors"
+      >
+        {saving ? 'Sending…' : 'Request admin to add'}
+      </button>
+    </form>
+  )
 }
 
 function AddToIngredientBankPanel({
@@ -408,6 +514,8 @@ function IngredientListSections({
   onToggleIngredientPantry,
   onReclassifyIngredient,
   onAddToIngredientBank,
+  onRequestIngredient,
+  isAdmin,
   onAddFreshIngredientRow,
   onAddPantryIngredientRow,
 }: {
@@ -422,6 +530,12 @@ function IngredientListSections({
     bankName: string,
     category: IngredientBankCategory
   ) => Promise<string | null>
+  onRequestIngredient: (
+    index: number,
+    bankName: string,
+    category: IngredientBankCategory
+  ) => Promise<string | null>
+  isAdmin: boolean
   onAddFreshIngredientRow: () => void
   onAddPantryIngredientRow: () => void
 }) {
@@ -484,11 +598,19 @@ function IngredientListSections({
                 {row.matchError && (
                   <>
                     <p className="text-xs text-red-500 pl-9">{row.matchError}</p>
-                    <AddToIngredientBankPanel
-                      row={row}
-                      index={index}
-                      onAdd={onAddToIngredientBank}
-                    />
+                    {isAdmin ? (
+                      <AddToIngredientBankPanel
+                        row={row}
+                        index={index}
+                        onAdd={onAddToIngredientBank}
+                      />
+                    ) : (
+                      <RequestIngredientPanel
+                        row={row}
+                        index={index}
+                        onRequest={onRequestIngredient}
+                      />
+                    )}
                   </>
                 )}
                 {row.catalogId && !row.matchError && row.catalogName && (
@@ -551,6 +673,8 @@ function RecipeFormPanel({
   onToggleIngredientPantry,
   onReclassifyIngredient,
   onAddToIngredientBank,
+  onRequestIngredient,
+  isAdmin,
   onSave,
   onCancel,
   onDelete,
@@ -650,6 +774,8 @@ function RecipeFormPanel({
         onToggleIngredientPantry={onToggleIngredientPantry}
         onReclassifyIngredient={onReclassifyIngredient}
         onAddToIngredientBank={onAddToIngredientBank}
+        onRequestIngredient={onRequestIngredient}
+        isAdmin={isAdmin}
         onAddFreshIngredientRow={onAddFreshIngredientRow}
         onAddPantryIngredientRow={onAddPantryIngredientRow}
       />
@@ -788,6 +914,46 @@ export default function Home() {
   const [ingredientCatalog, setIngredientCatalog] = useState<CatalogIngredient[]>([])
   const [catalogLoading, setCatalogLoading] = useState(true)
   const [supportsRecipeDisplayName, setSupportsRecipeDisplayName] = useState(true)
+  const [pendingRequestNames, setPendingRequestNames] = useState<Set<string>>(
+    () => new Set()
+  )
+  const { isAdmin, loading: authLoading } = useAuth()
+
+  useEffect(() => {
+    if (authLoading || isAdmin) return
+    fetchPendingIngredientRequestNames(supabase)
+      .then(setPendingRequestNames)
+      .catch((err) => console.error(err))
+  }, [authLoading, isAdmin])
+
+  useEffect(() => {
+    function refreshCatalogAndRequests() {
+      fetchIngredientCatalog(supabase)
+        .then(setIngredientCatalog)
+        .catch((err) => console.error(err))
+      if (!isAdmin) {
+        fetchPendingIngredientRequestNames(supabase)
+          .then(setPendingRequestNames)
+          .catch((err) => console.error(err))
+      }
+    }
+    window.addEventListener('focus', refreshCatalogAndRequests)
+    return () => window.removeEventListener('focus', refreshCatalogAndRequests)
+  }, [isAdmin])
+
+  function applyPendingRequestFlags(rows: IngredientRow[]): IngredientRow[] {
+    if (authLoading || isAdmin || pendingRequestNames.size === 0) return rows
+    return rows.map((row) => {
+      if (!row.matchError) return { ...row, bankRequestPending: false }
+      const suggested = normalizeRequestName(
+        suggestIngredientBankName(row.importLineText?.trim() || row.name)
+      )
+      return {
+        ...row,
+        bankRequestPending: pendingRequestNames.has(suggested),
+      }
+    })
+  }
 
   useEffect(() => {
     loadRecipes()
@@ -885,9 +1051,11 @@ export default function Home() {
     const fields = importedToFormFields(imported)
     const hasIngredients = fields.ingredients.some((i) => i.name.trim())
     const classified = hasIngredients
-      ? classifyIngredientRows(
-          fields.ingredients.filter((i) => i.name.trim()),
-          ingredientCatalog
+      ? applyPendingRequestFlags(
+          classifyIngredientRows(
+            fields.ingredients.filter((i) => i.name.trim()),
+            ingredientCatalog
+          )
         )
       : emptyForm.ingredients
     return {
@@ -911,7 +1079,7 @@ export default function Home() {
         catalogName: classified.catalogName,
         matchError: classified.matchError,
       }
-      return { ...f, ingredients: updated }
+      return { ...f, ingredients: applyPendingRequestFlags(updated) }
     })
   }
 
@@ -941,20 +1109,60 @@ export default function Home() {
         catalogName: classified.catalogName,
         matchError: classified.matchError,
       }
-      return { ...f, ingredients: updated }
+      return { ...f, ingredients: applyPendingRequestFlags(updated) }
     })
 
     return null
   }
 
+  async function handleRequestIngredient(
+    index: number,
+    bankName: string,
+    category: IngredientBankCategory
+  ): Promise<string | null> {
+    const row = form.ingredients[index]
+    const recipeLine = row?.importLineText?.trim() || row?.name?.trim() || ''
+    const result = await createIngredientRequest(
+      supabase,
+      bankName,
+      category,
+      recipeLine || null
+    )
+    if ('error' in result) return result.error
+
+    const norm = normalizeRequestName(bankName)
+    setPendingRequestNames((prev) => new Set(prev).add(norm))
+    setForm((f) => {
+      const updated = [...f.ingredients]
+      const current = updated[index]
+      if (!current) return f
+      updated[index] = { ...current, bankRequestPending: true }
+      return { ...f, ingredients: updated }
+    })
+    return null
+  }
+
   function validateAllIngredients(): string | null {
+    const waiting = form.ingredients.filter(
+      (row) => row.name.trim() && row.bankRequestPending
+    )
+    if (waiting.length > 0) {
+      const names = waiting
+        .map((r) => suggestIngredientBankName(r.importLineText?.trim() || r.name))
+        .slice(0, 3)
+        .join(', ')
+      const more = waiting.length > 3 ? ` and ${waiting.length - 3} more` : ''
+      return `Waiting for admin to add to ingredient bank: ${names}${more}.`
+    }
     const missing = form.ingredients.filter(
       (row) => row.name.trim() && (row.matchError || !row.catalogId)
     )
     if (missing.length === 0) return null
     const names = missing.map((r) => r.name.trim()).slice(0, 3).join(', ')
     const more = missing.length > 3 ? ` and ${missing.length - 3} more` : ''
-    return `Add missing ingredients to Supabase first: ${names}${more}.`
+    return isAdmin
+      ? `Add missing ingredients to the bank first: ${names}${more}.`
+      : `Request admin to add missing ingredients: ${names}${more}.`
   }
 
   function openAddChooser() {
@@ -1019,7 +1227,11 @@ export default function Home() {
 
     setShowForm(false)
     setEditingId(recipe.id)
-    setForm(recipeToForm(normalizeRecipes([data])[0], ingredientCatalog))
+    const nextForm = recipeToForm(normalizeRecipes([data])[0], ingredientCatalog)
+    setForm({
+      ...nextForm,
+      ingredients: applyPendingRequestFlags(nextForm.ingredients),
+    })
   }
 
   function cancelForm() {
@@ -1565,6 +1777,8 @@ export default function Home() {
     onToggleIngredientPantry: toggleIngredientPantry,
     onReclassifyIngredient: reclassifyIngredientAt,
     onAddToIngredientBank: handleAddToIngredientBank,
+    onRequestIngredient: handleRequestIngredient,
+    isAdmin,
   }
 
   return (

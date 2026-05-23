@@ -163,7 +163,7 @@ export function classifyIngredientLine(
       name: trimmed,
       catalogName: null,
       isPantry: false,
-      matchError: `Not in ingredient bank — add "${hint}" below or in Supabase.`,
+      matchError: `Not in ingredient bank — "${hint}" is not in the master list.`,
     }
   }
 
