@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getAuthUserId } from './auth-user'
 import {
   freshIngredientRefs,
   type RecipeIngredientRef,
@@ -38,12 +39,14 @@ function refsFromRow(row: RecipeRow): RecipeIngredientRef[] {
   })
 }
 
-/** Load fresh ingredients for selected recipes from the recipe bank (current DB metadata). */
+/** Load fresh ingredients for selected recipes from the current user's recipe bank. */
 export async function fetchFreshIngredientsForRecipes(
   supabase: SupabaseClient,
   recipeIds: string[]
 ): Promise<{ recipeId: string; freshIngredients: RecipeIngredientRef[] }[]> {
   if (recipeIds.length === 0) return []
+
+  const userId = await getAuthUserId(supabase)
 
   const { data, error } = await supabase
     .from('recipes')
@@ -58,6 +61,7 @@ export async function fetchFreshIngredientsForRecipes(
         )
       )
     `)
+    .eq('user_id', userId)
     .in('id', recipeIds)
 
   if (error) throw error

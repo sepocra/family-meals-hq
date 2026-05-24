@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   importedToFormFields,
   normalizeImportUrl,
@@ -21,6 +21,7 @@ import {
   normalizeRequestName,
 } from '../../lib/ingredient-requests'
 import { useAuth } from '../../components/AuthProvider'
+import { getAuthUserId } from '../../lib/auth-user'
 import { isMeatIngredient } from '../../lib/ingredient-category'
 import { shortenRecipeUrl } from '../../lib/recipe-url'
 import { supabase } from '../../lib/supabase'
@@ -89,12 +90,31 @@ const RECIPE_LIST_SELECT = `
   created_at
 `
 
-function sortRecipesByCreatedAt(recipes: Recipe[]): Recipe[] {
+type RecipeSort = 'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'
+
+const RECIPE_SORT_OPTIONS: { value: RecipeSort; label: string }[] = [
+  { value: 'date-desc', label: 'Import date (newest first)' },
+  { value: 'date-asc', label: 'Import date (oldest first)' },
+  { value: 'name-asc', label: 'Name (A–Z)' },
+  { value: 'name-desc', label: 'Name (Z–A)' },
+]
+
+function sortRecipes(recipes: Recipe[], sort: RecipeSort): Recipe[] {
   return [...recipes].sort((a, b) => {
+    if (sort === 'date-desc' || sort === 'date-asc') {
+      const ta = a.created_at ?? ''
+      const tb = b.created_at ?? ''
+      if (ta !== tb) {
+        const cmp = ta.localeCompare(tb)
+        return sort === 'date-desc' ? -cmp : cmp
+      }
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    }
+    const cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    if (cmp !== 0) return sort === 'name-desc' ? -cmp : cmp
     const ta = a.created_at ?? ''
     const tb = b.created_at ?? ''
-    if (ta !== tb) return ta.localeCompare(tb)
-    return a.name.localeCompare(b.name)
+    return tb.localeCompare(ta)
   })
 }
 
@@ -176,7 +196,10 @@ const effortBadgeClass: Record<string, string> = {
 }
 
 const inputClass =
-  'border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400 dark:focus:border-gray-500'
+  'w-full min-w-0 max-w-full box-border border border-gray-200 dark:border-gray-600 rounded-lg px-3 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400 dark:focus:border-gray-500'
+
+const qtyInputClass =
+  'w-12 shrink-0 box-border border border-gray-200 dark:border-gray-600 rounded-lg px-1.5 py-2 text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400 dark:focus:border-gray-500'
 
 type IngredientRow = {
   name: string
@@ -356,7 +379,7 @@ function RequestIngredientPanel({
   return (
     <form
       onSubmit={handleSubmit}
-      className="ml-9 mt-1 flex flex-col gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3"
+      className="mt-1 flex flex-col gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 min-w-0 max-w-full"
     >
       <p className="text-xs font-medium text-gray-600 dark:text-gray-300">
         Request admin to add to ingredient bank
@@ -441,7 +464,7 @@ function AddToIngredientBankPanel({
   return (
     <form
       onSubmit={handleSubmit}
-      className="ml-9 mt-1 flex flex-col gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3"
+      className="mt-1 flex flex-col gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 p-3 min-w-0 max-w-full"
     >
       <p className="text-xs font-medium text-gray-600 dark:text-gray-300">
         Add to ingredient bank
@@ -563,8 +586,8 @@ function IngredientListSections({
             <p className="text-sm text-gray-400 dark:text-gray-500 italic">None yet</p>
           ) : (
             rows.map(({ row, index }) => (
-              <div key={`${isPantry}-${index}`} className="flex flex-col gap-1">
-                <div className="flex gap-2 items-center">
+              <div key={`${isPantry}-${index}`} className="flex flex-col gap-1 min-w-0 max-w-full">
+                <div className="flex gap-2 items-center min-w-0">
                   <IngredientSwapButton
                     isPantry={row.isPantry}
                     onToggle={() => onToggleIngredientPantry(index)}
@@ -581,8 +604,9 @@ function IngredientListSections({
                     type="text"
                     value={row.quantity}
                     onChange={(e) => onUpdateIngredient(index, 'quantity', e.target.value)}
-                    placeholder="Qty e.g. 500g"
-                    className={`w-28 shrink-0 ${inputClass}`}
+                    placeholder="Qty"
+                    aria-label="Quantity"
+                    className={qtyInputClass}
                   />
                   {totalRows > 1 && (
                     <button
@@ -597,7 +621,7 @@ function IngredientListSections({
                 </div>
                 {row.matchError && (
                   <>
-                    <p className="text-xs text-red-500 pl-9">{row.matchError}</p>
+                    <p className="text-xs text-red-500 break-words">{row.matchError}</p>
                     {isAdmin ? (
                       <AddToIngredientBankPanel
                         row={row}
@@ -613,8 +637,8 @@ function IngredientListSections({
                     )}
                   </>
                 )}
-                {row.catalogId && !row.matchError && row.catalogName && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 pl-9 truncate">
+                {isAdmin && row.catalogId && !row.matchError && row.catalogName && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 truncate min-w-0">
                     Matched: {row.catalogName}
                   </p>
                 )}
@@ -634,7 +658,7 @@ function IngredientListSections({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4 min-w-0 max-w-full">
       {renderSection(
         false,
         'Fresh (fruit, veg & meat)',
@@ -680,9 +704,9 @@ function RecipeFormPanel({
   onDelete,
 }: RecipeFormPanelProps) {
   return (
-    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-6 flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-4 sm:p-6 flex flex-col gap-4 min-w-0 max-w-full overflow-hidden">
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100 min-w-0 truncate">{title}</h2>
         <button
           type="button"
           onClick={onCancel}
@@ -705,13 +729,13 @@ function RecipeFormPanel({
 
       <div className="flex flex-col gap-1">
         <label className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Effort level</label>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {EFFORT_LEVELS.map((level) => (
             <button
               key={level}
               type="button"
               onClick={() => onEffortChange(level)}
-              className={`text-sm px-4 py-1.5 rounded-full border transition-colors ${
+              className={`text-sm px-4 py-1.5 rounded-full border transition-colors shrink-0 ${
                 form.effort_level === level
                   ? 'bg-gray-900 text-white border-gray-900 dark:bg-gray-100 dark:text-gray-900 dark:border-gray-100'
                   : 'border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-gray-400 dark:hover:border-gray-500'
@@ -723,8 +747,8 @@ function RecipeFormPanel({
         </div>
       </div>
 
-      <div className="flex gap-4">
-        <div className="flex flex-col gap-1 flex-1">
+      <div className="flex flex-col sm:flex-row gap-4 min-w-0">
+        <div className="flex flex-col gap-1 flex-1 min-w-0">
           <label className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Prep (mins)</label>
           <input
             type="number"
@@ -734,7 +758,7 @@ function RecipeFormPanel({
             className={inputClass}
           />
         </div>
-        <div className="flex flex-col gap-1 flex-1">
+        <div className="flex flex-col gap-1 flex-1 min-w-0">
           <label className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide">Cook (mins)</label>
           <input
             type="number"
@@ -793,13 +817,15 @@ function RecipeFormPanel({
 
       {formError && <p className="text-red-500 text-sm">{formError}</p>}
 
-      <div className={`flex gap-3 ${onDelete ? 'justify-between' : ''}`}>
+      <div
+        className={`flex flex-col-reverse sm:flex-row gap-3 min-w-0 ${onDelete ? 'sm:justify-between' : ''}`}
+      >
         {onDelete && (
           <button
             type="button"
             onClick={onDelete}
             disabled={saving || deleting}
-            className="text-sm font-medium text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-50 transition-colors"
+            className="text-sm font-medium text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-50 transition-colors shrink-0"
           >
             {deleting ? 'Deleting...' : 'Delete recipe'}
           </button>
@@ -808,7 +834,7 @@ function RecipeFormPanel({
           type="button"
           onClick={onSave}
           disabled={saving || deleting}
-          className={`bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 rounded-lg px-4 py-2.5 text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-300 disabled:opacity-50 transition-colors ${onDelete ? '' : 'w-full'}`}
+          className={`bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900 rounded-lg px-4 py-2.5 text-sm font-medium hover:bg-gray-700 dark:hover:bg-gray-300 disabled:opacity-50 transition-colors ${onDelete ? 'sm:ml-auto' : 'w-full'}`}
         >
           {saving ? 'Saving...' : saveLabel}
         </button>
@@ -882,6 +908,7 @@ function DeleteConfirmDialog({
 
 export default function Home() {
   const [recipes, setRecipes] = useState<Recipe[]>([])
+  const [recipeSort, setRecipeSort] = useState<RecipeSort>('date-desc')
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -917,7 +944,7 @@ export default function Home() {
   const [pendingRequestNames, setPendingRequestNames] = useState<Set<string>>(
     () => new Set()
   )
-  const { isAdmin, loading: authLoading } = useAuth()
+  const { user, isAdmin, loading: authLoading } = useAuth()
 
   useEffect(() => {
     if (authLoading || isAdmin) return
@@ -956,6 +983,8 @@ export default function Home() {
   }
 
   useEffect(() => {
+    if (!user) return
+
     loadRecipes()
     fetchIngredientCatalog(supabase)
       .then(setIngredientCatalog)
@@ -969,17 +998,25 @@ export default function Home() {
       .then(({ error }) => {
         if (isDisplayNameSchemaError(error)) setSupportsRecipeDisplayName(false)
       })
-  }, [])
+  }, [user?.id])
 
   async function loadRecipes() {
+    let userId: string
+    try {
+      userId = await getAuthUserId(supabase)
+    } catch {
+      setLoading(false)
+      return
+    }
+
     const { data, error } = await supabase
       .from('recipes')
       .select(RECIPE_LIST_SELECT)
-      .order('created_at', { ascending: true })
+      .eq('user_id', userId)
     if (error) {
       console.error(error)
     } else {
-      setRecipes(sortRecipesByCreatedAt(normalizeRecipes(data ?? [])))
+      setRecipes(normalizeRecipes(data ?? []))
     }
     setLoading(false)
   }
@@ -1218,6 +1255,7 @@ export default function Home() {
           : RECIPE_WITH_INGREDIENTS_SELECT_LEGACY
       )
       .eq('id', recipe.id)
+      .eq('user_id', user?.id ?? '')
       .single()
 
     if (error || !data) {
@@ -1464,9 +1502,17 @@ export default function Home() {
   }
 
   async function saveImportedRecipe(imported: ImportedRecipe): Promise<string | null> {
+    let userId: string
+    try {
+      userId = await getAuthUserId(supabase)
+    } catch {
+      return 'Not signed in.'
+    }
+
     const { data: recipeData, error: recipeError } = await supabase
       .from('recipes')
       .insert({
+        user_id: userId,
         name: imported.name.trim(),
         effort_level: 'low',
         prep_minutes: imported.prep_minutes ? parseInt(imported.prep_minutes) : null,
@@ -1548,9 +1594,19 @@ export default function Home() {
 
     setSaving(true)
 
+    let userId: string
+    try {
+      userId = await getAuthUserId(supabase)
+    } catch {
+      setFormError('Not signed in.')
+      setSaving(false)
+      return
+    }
+
     const { data: recipeData, error: recipeError } = await supabase
       .from('recipes')
       .insert({
+        user_id: userId,
         name: form.name.trim(),
         effort_level: normalizeEffortLevel(form.effort_level),
         prep_minutes: form.prep_minutes ? parseInt(form.prep_minutes) : null,
@@ -1617,6 +1673,7 @@ export default function Home() {
         source_url: form.source_url.trim() || null,
       })
       .eq('id', editingId)
+      .eq('user_id', user?.id ?? '')
 
     if (recipeError) {
       setFormError(recipeError.message ?? 'Failed to update recipe.')
@@ -1634,6 +1691,7 @@ export default function Home() {
       .from('recipes')
       .select(RECIPE_WITH_INGREDIENTS_SELECT)
       .eq('id', editingId)
+      .eq('user_id', user?.id ?? '')
       .single()
 
     if (fetchError || !updatedRow) {
@@ -1683,6 +1741,7 @@ export default function Home() {
       .from('recipes')
       .delete()
       .eq('id', editingId)
+      .eq('user_id', user?.id ?? '')
       .select('id')
 
     if (recipeError) {
@@ -1734,9 +1793,19 @@ export default function Home() {
       return
     }
 
+    let userId: string
+    try {
+      userId = await getAuthUserId(supabase)
+    } catch {
+      setDeleteAllError('Not signed in.')
+      setDeletingAll(false)
+      return
+    }
+
     const { data: deleted, error: recipeError } = await supabase
       .from('recipes')
       .delete()
+      .eq('user_id', userId)
       .in('id', ids)
       .select('id')
 
@@ -1760,6 +1829,11 @@ export default function Home() {
     loadRecipes()
   }
 
+  const sortedRecipes = useMemo(
+    () => sortRecipes(recipes, recipeSort),
+    [recipes, recipeSort]
+  )
+
   const formPanelProps = {
     form,
     formError,
@@ -1782,7 +1856,7 @@ export default function Home() {
   }
 
   return (
-    <main className="max-w-2xl mx-auto px-6 py-10">
+    <main className="max-w-2xl mx-auto px-4 sm:px-6 py-10 min-w-0 w-full overflow-x-hidden">
       <div className="flex items-start justify-between gap-4 mb-1">
         <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100">📚 Recipe bank</h1>
         <button
@@ -1796,7 +1870,7 @@ export default function Home() {
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-8">Your saved family recipes</p>
 
       {showAddChooser && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 flex flex-col gap-4">
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-4 sm:p-6 mb-6 flex flex-col gap-4 min-w-0 max-w-full overflow-hidden">
           <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Add recipe</h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Choose how you want to add your recipe.
@@ -1837,7 +1911,7 @@ export default function Home() {
       )}
 
       {showImport && (
-        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6 flex flex-col gap-4">
+        <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-4 sm:p-6 mb-6 flex flex-col gap-4 min-w-0 max-w-full overflow-hidden">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
               {importMode === 'google-doc' ? 'Import from Google Doc' : 'Import from URL'}
@@ -2038,7 +2112,7 @@ export default function Home() {
       )}
 
       {showForm && !editingId && (
-        <div className="mb-6">
+        <div className="mb-6 min-w-0 max-w-full">
           <div className="flex justify-end mb-2">
             <button
               type="button"
@@ -2065,8 +2139,31 @@ export default function Home() {
       {/* ── Recipe list ── */}
       {loading && <p className="text-gray-400 dark:text-gray-500 text-sm">Loading recipes...</p>}
 
+      {!loading && recipes.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-4 min-w-0">
+          <label
+            htmlFor="recipe-sort"
+            className="text-sm text-gray-500 dark:text-gray-400 shrink-0"
+          >
+            Sort by
+          </label>
+          <select
+            id="recipe-sort"
+            value={recipeSort}
+            onChange={(e) => setRecipeSort(e.target.value as RecipeSort)}
+            className={`${inputClass} sm:max-w-xs`}
+          >
+            {RECIPE_SORT_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="flex flex-col gap-3">
-        {recipes.map((recipe) =>
+        {sortedRecipes.map((recipe) =>
           editingId === recipe.id ? (
             <RecipeFormPanel
               key={recipe.id}

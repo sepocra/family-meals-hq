@@ -167,10 +167,22 @@ CREATE INDEX IF NOT EXISTS fresh_inventory_items_user_id_idx
 
 ALTER TABLE fresh_inventory_items ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users manage own fresh_inventory"
-  ON fresh_inventory_items FOR ALL TO authenticated
+CREATE POLICY "Users read own fresh_inventory"
+  ON fresh_inventory_items FOR SELECT TO authenticated
+  USING (user_id = auth.uid());
+
+CREATE POLICY "Users insert own fresh_inventory"
+  ON fresh_inventory_items FOR INSERT TO authenticated
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users update own fresh_inventory"
+  ON fresh_inventory_items FOR UPDATE TO authenticated
   USING (user_id = auth.uid())
   WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Users delete own fresh_inventory"
+  ON fresh_inventory_items FOR DELETE TO authenticated
+  USING (user_id = auth.uid());
 
 -- ---------------------------------------------------------------------------
 -- Weekly meals state (per user; suggestions JSON + selected recipe ids)

@@ -95,7 +95,7 @@ export default function FreshInventoryPage() {
       .catch((err) => {
         console.error(err)
         setLoadError(
-          'Could not load inventory. Run docs/supabase-multi-user.sql in Supabase.'
+          'Could not load inventory. Run docs/supabase-multi-user.sql (or supabase-multi-user-fix.sql) in Supabase.'
         )
       })
       .finally(() => setHydrated(true))
@@ -109,7 +109,9 @@ export default function FreshInventoryPage() {
       setLoadError(null)
     } catch (err) {
       console.error(err)
-      setLoadError('Failed to save inventory.')
+      setLoadError(
+        'Failed to save inventory. Run docs/supabase-multi-user-fix.sql in Supabase if this is a new account.'
+      )
     }
     setSaving(false)
   }

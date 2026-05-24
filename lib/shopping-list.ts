@@ -82,3 +82,37 @@ export function buildShoppingList(
 
   return { produce, meat }
 }
+
+function formatInventoryLine(item: FreshInventoryItem): string {
+  const qty = item.quantity?.trim()
+  return qty ? `${qty} ${item.name}` : item.name
+}
+
+/**
+ * Fresh inventory items not matched by any fresh ingredient in selected meals.
+ */
+export function buildUnusedInventory(
+  meals: MealForShopping[],
+  inventory: FreshInventoryItem[]
+): ShoppingListByCategory {
+  const produce: string[] = []
+  const meat: string[] = []
+
+  for (const item of inventory) {
+    const used = meals.some((meal) =>
+      meal.freshIngredients.some((ing) =>
+        ingredientsMatchExactly(item.name, ing.name)
+      )
+    )
+    if (used) continue
+
+    const line = formatInventoryLine(item)
+    if (item.category === 'meat') meat.push(line)
+    else produce.push(line)
+  }
+
+  produce.sort((a, b) => a.localeCompare(b))
+  meat.sort((a, b) => a.localeCompare(b))
+
+  return { produce, meat }
+}

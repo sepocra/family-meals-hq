@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { shortenRecipeUrl } from '../../lib/recipe-url'
+import { getAuthUserId } from '../../lib/auth-user'
 import { supabase } from '../../lib/supabase'
 import { freshIngredientRefs } from '../../lib/match-recipes'
 import {
@@ -113,7 +114,8 @@ export default function ThisWeeksMealsPage() {
                 0,
             }))
           )
-          setSelectedIds(stored.selectedIds ?? [])
+          const validIds = new Set(stored.suggestions.map((r) => r.id))
+          setSelectedIds((stored.selectedIds ?? []).filter((id) => validIds.has(id)))
           setLastRefreshed(stored.generatedAt)
           setWeeklySnapshot({
             generatedAt: stored.generatedAt,
@@ -154,6 +156,14 @@ export default function ThisWeeksMealsPage() {
   const refreshMeals = useCallback(async () => {
     setRefreshing(true)
 
+    let userId: string
+    try {
+      userId = await getAuthUserId(supabase)
+    } catch {
+      setRefreshing(false)
+      return
+    }
+
     const { data, error } = await supabase
       .from('recipes')
       .select(`
@@ -173,6 +183,7 @@ export default function ThisWeeksMealsPage() {
           )
         )
       `)
+      .eq('user_id', userId)
 
     if (error) {
       console.error(error)

@@ -30,6 +30,13 @@ export function cleanIngredientLine(line: string): string {
 }
 
 /** Serving / garnish / marinade lines — not shopped; skip on import. */
+/** Subsection labels in ingredient lists (e.g. "CRUMB", "**Sauce**"). */
+export function isIngredientSectionHeader(text: string): boolean {
+  const t = cleanIngredientLine(text).replace(/^\*\*|\*\*$/g, '').trim()
+  if (!t || t.length > 48 || /\d/.test(t)) return false
+  return /^[A-Z][A-Z\s&/-]+$/.test(t)
+}
+
 export function isServingNoteIngredient(text: string): boolean {
   const t = cleanIngredientLine(text).toLowerCase()
   if (!t) return false
@@ -61,7 +68,7 @@ export function parseImportedIngredientLines(
   const rows: { name: string; quantity: string; lineText: string }[] = []
   for (const raw of lines) {
     const lineText = cleanIngredientLine(raw)
-    if (!lineText || isServingNoteIngredient(lineText)) continue
+    if (!lineText || isIngredientSectionHeader(lineText) || isServingNoteIngredient(lineText)) continue
     const parsed = parseIngredientLine(raw)
     if (!parsed.name.trim() || isServingNoteIngredient(parsed.name)) continue
     rows.push({ ...parsed, lineText })
@@ -72,7 +79,7 @@ export function parseImportedIngredientLines(
 const FRACTIONS = '¼½¾⅓⅔⅛⅜⅝⅞'
 const NUM = `[\\d${FRACTIONS}]+(?:[./][\\d${FRACTIONS}]+)?(?:\\s*[-–]\\s*[\\d${FRACTIONS}]+(?:[./][\\d${FRACTIONS}]+)?)?`
 
-const METRIC_UNITS = 'kg|g|ml|l|litres?|liters?|oz|lb'
+const METRIC_UNITS = 'kg|g|grams?|ml|l|litres?|liters?|oz|lb'
 const MEASURE_UNITS =
   'cups?|tbsp|tsp|teaspoons?|tablespoons?|quarts?|handfuls?|cloves?|pinch(?:es)?'
 const CONTAINER_UNITS = 'cans?|bottles?|bottle|packets?|packet|bunch(?:es)?'
@@ -135,31 +142,41 @@ function parseInstructions(value: unknown): string {
   return steps.map((s, i) => `${i + 1}. ${s}`).join('\n\n')
 }
 
-function parseIngredients(value: unknown): { name: string; quantity: string }[] {
-  if (!Array.isArray(value)) return []
-
-  const rows: { name: string; quantity: string; lineText?: string }[] = []
-  for (const item of value) {
-    if (typeof item === 'string') {
-      if (isServingNoteIngredient(item)) continue
-      const lineText = cleanIngredientLine(item)
-      const parsed = parseIngredientLine(item)
-      if (parsed.name && !isServingNoteIngredient(parsed.name)) {
-        rows.push({ ...parsed, lineText: lineText || parsed.name })
+/** JSON-LD recipeIngredient may be an array or an object with numeric keys (WordPress). */
+export function recipeIngredientLines(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const lines: string[] = []
+    for (const item of value) {
+      if (typeof item === 'string') {
+        lines.push(item)
+        continue
       }
-      continue
-    }
-    if (item && typeof item === 'object') {
-      const ing = item as Record<string, unknown>
-      const name = cleanText(ing.name)
-      const quantity = cleanText(ing.amount) || cleanText(ing.quantity)
-      if (name && !isServingNoteIngredient(name)) {
-        const lineText = quantity ? `${quantity} ${name}`.trim() : name
-        rows.push({ name, quantity, lineText })
+      if (item && typeof item === 'object') {
+        const ing = item as Record<string, unknown>
+        const name = cleanText(ing.name)
+        const amount = cleanText(ing.amount) || cleanText(ing.quantity)
+        if (name) lines.push(amount ? `${amount} ${name}`.trim() : name)
       }
     }
+    return lines
   }
-  return rows
+
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    const keys = Object.keys(obj).sort((a, b) => {
+      const na = Number(a)
+      const nb = Number(b)
+      if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb
+      return a.localeCompare(b)
+    })
+    return keys.map((k) => cleanText(obj[k])).filter(Boolean)
+  }
+
+  return []
+}
+
+function parseIngredients(value: unknown): { name: string; quantity: string; lineText?: string }[] {
+  return parseImportedIngredientLines(recipeIngredientLines(value))
 }
 
 function isRecipeType(type: unknown): boolean {
