@@ -1,27 +1,111 @@
 @import "tailwindcss";
 
+/* Obsidian & cream — near-monochrome + coral for actions only */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --base: #f7f3ec;
+  --surface: #efe9df;
+  --card: #ffffff;
+  --border: #e0d8cc;
+  --primary: #1c1917;
+  --muted: #78716c;
+  --coral: #d46945;
+  --coral-hover: #bf5a38;
+  --on-coral: #0f0e0d;
+  --coral-muted: #f5e4dc;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-base: var(--base);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-muted: var(--muted);
+  --color-coral: var(--coral);
+  --color-coral-hover: var(--coral-hover);
+  --color-on-coral: var(--on-coral);
+  --color-coral-muted: var(--coral-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --base: #0f0e0d;
+    --surface: #1a1918;
+    --card: #222120;
+    --border: #3a3836;
+    --primary: #f5f0e8;
+    --muted: #9a9490;
+    --coral: #e07355;
+    --coral-hover: #ec8365;
+    --on-coral: #0f0e0d;
+    --coral-muted: #3d2a24;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--base);
+  color: var(--primary);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
   overflow-x: hidden;
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-coral text-on-coral font-medium rounded-xl transition-colors;
+    @apply hover:bg-coral-hover;
+  }
+
+  .btn-primary:disabled {
+    @apply opacity-50;
+  }
+
+  .btn-secondary {
+    @apply border border-border text-primary rounded-xl px-4 py-2.5 text-sm font-medium;
+    @apply hover:border-muted transition-colors;
+  }
+
+  .surface-card {
+    @apply bg-card border border-border rounded-2xl;
+  }
+
+  .field-input {
+    @apply w-full min-w-0 max-w-full box-border border border-border rounded-xl px-3 py-2 text-sm;
+    @apply bg-card text-primary outline-none;
+    @apply focus:border-coral;
+  }
+
+  .link-accent {
+    @apply text-coral underline underline-offset-2;
+    @apply hover:text-coral-hover;
+  }
+
+  .page-title-accent {
+    @apply border-l-4 border-coral pl-3;
+  }
+
+  .nav-active {
+    @apply bg-coral text-on-coral;
+  }
+
+  .nav-inactive {
+    @apply text-muted hover:bg-surface;
+  }
+}
+
+@keyframes admin-banner-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.admin-banner-enter {
+  animation: admin-banner-slide-up 0.28s ease-out;
 }

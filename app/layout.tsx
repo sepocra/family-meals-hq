@@ -22,17 +22,20 @@ export const metadata: Metadata = {
   description: "Family meal planning — recipes, fresh inventory, and weekly meals",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
+  params,
 }: Readonly<{
   children: React.ReactNode;
+  params: Promise<Record<string, string | string[]>>;
 }>) {
+  await params;
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col bg-base text-primary antialiased">
         <AppProviders>
           <AppNav />
           {children}
