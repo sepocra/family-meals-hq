@@ -11,7 +11,8 @@ import {
   type ReactNode,
 } from 'react'
 import { ensureProfile, type Profile } from '../lib/profile'
-import { createClient } from '../lib/supabase/client'
+import type { ServerSession } from '../lib/server-auth'
+import { supabase } from '../lib/supabase'
 
 type AuthContextValue = {
   user: User | null
@@ -24,53 +25,60 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => createClient(), [])
-  const [user, setUser] = useState<User | null>(null)
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [loading, setLoading] = useState(true)
+type AuthProviderProps = {
+  children: ReactNode
+  initialSession: ServerSession
+}
 
-  const loadProfile = useCallback(
-    async (userId: string) => {
-      try {
-        const p = await ensureProfile(supabase, userId)
-        setProfile(p)
-      } catch (err) {
-        console.error(err)
-        setProfile(null)
-      }
-    },
-    [supabase]
-  )
+export function AuthProvider({ children, initialSession }: AuthProviderProps) {
+  const [user, setUser] = useState<User | null>(initialSession.user)
+  const [profile, setProfile] = useState<Profile | null>(initialSession.profile)
+  const [loading, setLoading] = useState(false)
+
+  const loadProfile = useCallback(async (userId: string) => {
+    try {
+      const p = await ensureProfile(supabase, userId)
+      setProfile(p)
+    } catch (err) {
+      console.error(err)
+      setProfile(null)
+    }
+  }, [])
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      const u = session?.user ?? null
-      setUser(u)
-      if (u) loadProfile(u.id).finally(() => setLoading(false))
-      else {
-        setProfile(null)
-        setLoading(false)
-      }
-    })
-
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       const u = session?.user ?? null
       setUser(u)
-      if (u) loadProfile(u.id)
-      else setProfile(null)
+      if (!u) {
+        setProfile(null)
+        return
+      }
+
+      // Server layout already loaded profile on full page refresh.
+      if (
+        event === 'INITIAL_SESSION' &&
+        u.id === initialSession.user?.id &&
+        initialSession.profile
+      ) {
+        return
+      }
+
+      // Never call Supabase REST from inside this callback (causes "Failed to fetch").
+      window.setTimeout(() => {
+        void loadProfile(u.id)
+      }, 0)
     })
 
     return () => subscription.unsubscribe()
-  }, [supabase, loadProfile])
+  }, [loadProfile, initialSession.user?.id, initialSession.profile])
 
   const signOut = useCallback(async () => {
     await supabase.auth.signOut()
     setUser(null)
     setProfile(null)
-  }, [supabase])
+  }, [])
 
   const refreshProfile = useCallback(async () => {
     if (!user) return

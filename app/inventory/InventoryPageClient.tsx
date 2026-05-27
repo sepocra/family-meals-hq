@@ -75,19 +75,27 @@ function AddInventoryBox({
   )
 }
 
-export default function FreshInventoryPage() {
-  const [items, setItems] = useState<FreshInventoryItem[]>([])
+type InventoryPageClientProps = {
+  initialItems?: FreshInventoryItem[]
+}
+
+export default function FreshInventoryPage({
+  initialItems,
+}: InventoryPageClientProps = {}) {
+  const [items, setItems] = useState<FreshInventoryItem[]>(() => initialItems ?? [])
   const [draftProduce, setDraftProduce] = useState('')
   const [draftProduceQty, setDraftProduceQty] = useState('')
   const [draftMeat, setDraftMeat] = useState('')
   const [draftMeatQty, setDraftMeatQty] = useState('')
-  const [hydrated, setHydrated] = useState(false)
+  const [hydrated, setHydrated] = useState(initialItems !== undefined)
   const [saving, setSaving] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [listOpen, setListOpen] = useState(true)
 
   useEffect(() => {
+    if (initialItems !== undefined) return
+
     fetchUserFreshInventory(supabase)
       .then(setItems)
       .catch((err) => {
@@ -97,7 +105,7 @@ export default function FreshInventoryPage() {
         )
       })
       .finally(() => setHydrated(true))
-  }, [])
+  }, [initialItems])
 
   async function persist(next: FreshInventoryItem[]) {
     setItems(next)

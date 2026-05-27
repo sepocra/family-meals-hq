@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import { shortenRecipeUrl } from '../../lib/recipe-url'
+import { mealTypeBadgeClasses } from '../../lib/recipe-tags'
+import { sanitizeRecipeSourceUrl, shortenRecipeUrl } from '../../lib/recipe-url'
 import { getAuthUserId } from '../../lib/auth-user'
 import { btnPrimary, linkAccent, pageTitleAccent, surfaceCard, textMuted } from '../../lib/brand-classes'
 import { supabase } from '../../lib/supabase'
@@ -15,36 +16,43 @@ import {
   saveUserWeeklyMeals,
 } from '../../lib/user-weekly-meals-db'
 import {
+  formatFreshInventoryMatch,
   formatWeeklyMealsRefreshed,
   MAX_WEEKLY_MEAL_SELECTIONS,
   rankRecipesByFreshInventory,
+  type StoredWeeklyMeals,
   type WeeklyMealSuggestion,
 } from '../../lib/weekly-meals'
 
-const EFFORT_LABELS: Record<string, string> = {
-  low: 'Easy',
-  medium: 'Medium',
-  high: 'Hard',
-}
-
-function effortLabel(level: string): string {
-  const key = level.toLowerCase()
-  return EFFORT_LABELS[key] ?? level
-}
-
-const effortBadgeClass: Record<string, string> = {
-  low: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
-  medium: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-  high: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
+function weeklyMealsFromStored(stored: StoredWeeklyMeals) {
+  const suggestions = stored.suggestions.map((r) => ({
+    ...r,
+    freshIngredients: r.freshIngredients ?? [],
+    freshRequiredCount:
+      r.freshRequiredCount ??
+      r.freshIngredients?.length ??
+      r.ingredientNames?.length ??
+      0,
+    produceMatched: r.produceMatched ?? 0,
+    meatMatched: r.meatMatched ?? 0,
+    produceRequired: r.produceRequired ?? 0,
+    meatRequired: r.meatRequired ?? 0,
+  }))
+  const validIds = new Set(suggestions.map((r) => r.id))
+  return {
+    suggestions,
+    selectedIds: (stored.selectedIds ?? []).filter((id) => validIds.has(id)),
+    generatedAt: stored.generatedAt,
+  }
 }
 
 type RecipeRow = {
   id: string
   name: string
-  effort_level: string
   prep_minutes: number | null
   cook_minutes: number | null
   dietary_tags: string[]
+  meal_types?: string[]
   source_url: string | null
   recipe_ingredients?: {
     quantity: string
@@ -79,54 +87,65 @@ function toRecipeForMatching(row: RecipeRow) {
   return {
     id: row.id,
     name: row.name,
-    effort_level: row.effort_level,
     prep_minutes: row.prep_minutes,
     cook_minutes: row.cook_minutes,
     dietary_tags: row.dietary_tags ?? [],
+    meal_types: row.meal_types ?? [],
     source_url: row.source_url,
     ingredientNames: freshIngredients.map((i) => i.name),
     freshIngredients,
   }
 }
 
-export default function ThisWeeksMealsPage() {
-  const [rankedRecipes, setRankedRecipes] = useState<WeeklyMealSuggestion[]>([])
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null)
+type MealsPageClientProps = {
+  initialWeeklyMeals?: StoredWeeklyMeals | null
+}
+
+export default function ThisWeeksMealsPage({
+  initialWeeklyMeals,
+}: MealsPageClientProps = {}) {
+  const initial = initialWeeklyMeals
+    ? weeklyMealsFromStored(initialWeeklyMeals)
+    : null
+
+  const [rankedRecipes, setRankedRecipes] = useState<WeeklyMealSuggestion[]>(
+    () => initial?.suggestions ?? []
+  )
+  const [selectedIds, setSelectedIds] = useState<string[]>(
+    () => initial?.selectedIds ?? []
+  )
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(
+    () => initial?.generatedAt ?? null
+  )
   const [refreshing, setRefreshing] = useState(false)
-  const [hydrated, setHydrated] = useState(false)
+  const [hydrated, setHydrated] = useState(initialWeeklyMeals !== undefined)
   const [weeklySnapshot, setWeeklySnapshot] = useState<{
     generatedAt: string
     suggestions: WeeklyMealSuggestion[]
-  } | null>(null)
+  } | null>(() =>
+    initial
+      ? { generatedAt: initial.generatedAt, suggestions: initial.suggestions }
+      : null
+  )
 
   useEffect(() => {
+    if (initialWeeklyMeals !== undefined) return
+
     fetchUserWeeklyMeals(supabase)
       .then((stored) => {
-        if (stored) {
-          setRankedRecipes(
-            stored.suggestions.map((r) => ({
-              ...r,
-              freshIngredients: r.freshIngredients ?? [],
-              freshRequiredCount:
-                r.freshRequiredCount ??
-                r.freshIngredients?.length ??
-                r.ingredientNames?.length ??
-                0,
-            }))
-          )
-          const validIds = new Set(stored.suggestions.map((r) => r.id))
-          setSelectedIds((stored.selectedIds ?? []).filter((id) => validIds.has(id)))
-          setLastRefreshed(stored.generatedAt)
-          setWeeklySnapshot({
-            generatedAt: stored.generatedAt,
-            suggestions: stored.suggestions,
-          })
-        }
+        if (!stored) return
+        const parsed = weeklyMealsFromStored(stored)
+        setRankedRecipes(parsed.suggestions)
+        setSelectedIds(parsed.selectedIds)
+        setLastRefreshed(parsed.generatedAt)
+        setWeeklySnapshot({
+          generatedAt: parsed.generatedAt,
+          suggestions: parsed.suggestions,
+        })
       })
       .catch(console.error)
       .finally(() => setHydrated(true))
-  }, [])
+  }, [initialWeeklyMeals])
 
   async function persistSelections(nextIds: string[], snapshot = weeklySnapshot) {
     if (!snapshot) return
@@ -170,10 +189,10 @@ export default function ThisWeeksMealsPage() {
       .select(`
         id,
         name,
-        effort_level,
         prep_minutes,
         cook_minutes,
         dietary_tags,
+        meal_types,
         source_url,
         recipe_ingredients (
           quantity,
@@ -193,15 +212,18 @@ export default function ThisWeeksMealsPage() {
     }
 
     const recipes = (data ?? []).map(toRecipeForMatching)
-    let inventoryNames: string[] = []
+    let inventoryForMatch: { name: string; category: 'produce' | 'meat' }[] = []
     try {
       const inventory = await fetchUserFreshInventory(supabase)
-      inventoryNames = inventory.map((item) => item.name)
+      inventoryForMatch = inventory.map((item) => ({
+        name: item.name,
+        category: item.category,
+      }))
     } catch (err) {
       console.error(err)
     }
 
-    const ranked = rankRecipesByFreshInventory(recipes, inventoryNames)
+    const ranked = rankRecipesByFreshInventory(recipes, inventoryForMatch)
     const generatedAt = new Date().toISOString()
     setRankedRecipes(ranked)
     setLastRefreshed(generatedAt)
@@ -240,11 +262,11 @@ export default function ThisWeeksMealsPage() {
         </button>
       </div>
       <p className={`text-sm ${textMuted} mb-2`}>
-        All your recipes ranked by how much they use what&apos;s in{' '}
+        Recipes ranked by what&apos;s in{' '}
         <Link href="/inventory" className={linkAccent}>
           Fresh Inventory
         </Link>
-        . Select up to {MAX_WEEKLY_MEAL_SELECTIONS} for your{' '}
+        , with meat matches first. Select up to {MAX_WEEKLY_MEAL_SELECTIONS} for your{' '}
         <Link href="/shopping" className={linkAccent}>
           shopping list
         </Link>
@@ -293,10 +315,9 @@ export default function ThisWeeksMealsPage() {
             {rankedRecipes.map((recipe) => {
               const selected = selectedIds.includes(recipe.id)
               const disabled = !selected && selectionFull
-              const freshCount =
-                recipe.freshRequiredCount ??
-                recipe.freshIngredients?.length ??
-                recipe.ingredientNames.length
+              const produceUsed = recipe.produceMatched ?? 0
+              const meatUsed = recipe.meatMatched ?? 0
+              const displaySourceUrl = sanitizeRecipeSourceUrl(recipe.source_url)
 
               return (
                 <div
@@ -325,28 +346,21 @@ export default function ThisWeeksMealsPage() {
                         <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
                           {recipe.name}
                         </h2>
-                        {recipe.effort_level && (
-                          <span
-                            className={`shrink-0 text-xs font-medium px-2.5 py-1 rounded-full ${effortBadgeClass[recipe.effort_level.toLowerCase()] ?? 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}
-                          >
-                            {effortLabel(recipe.effort_level)}
-                          </span>
-                        )}
                       </div>
-                      {recipe.source_url && (
+                      {displaySourceUrl && (
                         <a
-                          href={recipe.source_url}
+                          href={displaySourceUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 underline underline-offset-2 mb-2 inline-block max-w-full truncate"
-                          title={recipe.source_url}
+                          title={displaySourceUrl}
                         >
-                          {shortenRecipeUrl(recipe.source_url)}
+                          {shortenRecipeUrl(displaySourceUrl)}
                         </a>
                       )}
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
                         <span>
-                          {recipe.score} of {freshCount} fresh ingredients in stock
+                          {formatFreshInventoryMatch(produceUsed, meatUsed)}
                         </span>
                         {recipe.prep_minutes != null && (
                           <span>⏱ {recipe.prep_minutes} min prep</span>
@@ -355,11 +369,20 @@ export default function ThisWeeksMealsPage() {
                           <span>🔥 {recipe.cook_minutes} min cook</span>
                         )}
                       </div>
-                      {recipe.dietary_tags?.length > 0 && (
+                      {((recipe.meal_types?.length ?? 0) > 0 ||
+                        (recipe.dietary_tags?.length ?? 0) > 0) && (
                         <div className="flex flex-wrap gap-1.5 mt-2">
-                          {recipe.dietary_tags.map((tag) => (
+                          {(recipe.meal_types ?? []).map((tag) => (
                             <span
-                              key={tag}
+                              key={`meal-${tag}`}
+                              className={`text-xs rounded-full px-2 py-0.5 border ${mealTypeBadgeClasses(tag)}`}
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                          {recipe.dietary_tags?.map((tag) => (
+                            <span
+                              key={`diet-${tag}`}
                               className="text-xs bg-green-50 text-green-700 border border-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800 rounded-full px-2 py-0.5"
                             >
                               {tag}

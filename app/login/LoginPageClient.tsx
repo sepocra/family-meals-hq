@@ -3,13 +3,12 @@
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { btnPrimaryWide, fieldInput, linkAccent, pageTitleAccent, textMuted } from '../../lib/brand-classes'
-import { createClient } from '../../lib/supabase/client'
+import { supabase } from '../../lib/supabase'
 
 const inputClass = fieldInput
 
 export default function LoginPageClient({ next }: { next: string }) {
   const router = useRouter()
-  const supabase = createClient()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

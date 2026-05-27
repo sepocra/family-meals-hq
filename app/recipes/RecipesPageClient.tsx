@@ -7,6 +7,7 @@ import {
 } from '../../lib/recipe-import'
 import {
   classifyIngredientLine,
+  classifyIngredientLineRelaxed,
   classifyIngredientRows,
   createIngredientInBank,
   fetchIngredientCatalog,
@@ -31,12 +32,22 @@ import {
   textMuted,
 } from '../../lib/brand-classes'
 import { isMeatIngredient } from '../../lib/ingredient-category'
-import { shortenRecipeUrl } from '../../lib/recipe-url'
+import type { RecipeListItem } from '../../lib/recipe-list'
+import { RECIPE_LIST_SELECT } from '../../lib/recipe-list'
+import {
+  DIETARY_TAGS,
+  MEAL_TYPE_TAGS,
+  mealTypeBadgeClasses,
+  mealTypeToggleClasses,
+} from '../../lib/recipe-tags'
+import { isGoogleDocSourceUrl, sanitizeRecipeSourceUrl, shortenRecipeUrl } from '../../lib/recipe-url'
 import { supabase } from '../../lib/supabase'
+import { useLongPress } from '../../lib/use-long-press'
 
 type RecipeIngredient = {
   quantity: string
   display_name: string | null
+  ingredient_id?: string | null
   ingredients: {
     name: string
     pantry_type: string | null
@@ -47,11 +58,11 @@ type RecipeIngredient = {
 type Recipe = {
   id: string
   name: string
-  effort_level: string
   prep_minutes: number | null
   cook_minutes: number | null
   instructions: string | null
   dietary_tags: string[]
+  meal_types: string[]
   source_url: string | null
   created_at?: string | null
   recipe_ingredients: RecipeIngredient[]
@@ -61,16 +72,17 @@ type Recipe = {
 type RecipeRow = {
   id: string
   name: string
-  effort_level: string
   prep_minutes: number | null
   cook_minutes: number | null
   instructions: string | null
   dietary_tags: string[]
+  meal_types?: string[]
   source_url: string | null
   created_at?: string | null
   recipe_ingredients?: {
     quantity: string
     display_name?: string | null
+    ingredient_id?: string | null
     ingredients:
       | {
           name: string
@@ -86,17 +98,9 @@ type RecipeRow = {
   }[]
 }
 
-const RECIPE_LIST_SELECT = `
-  id,
-  name,
-  effort_level,
-  prep_minutes,
-  cook_minutes,
-  instructions,
-  dietary_tags,
-  source_url,
-  created_at
-`
+const RECIPE_WITH_INGREDIENTS_SELECT = `${RECIPE_LIST_SELECT}, recipe_ingredients (quantity, display_name, ingredient_id, ingredients (name, pantry_type, category))`
+
+const RECIPE_WITH_INGREDIENTS_SELECT_LEGACY = `${RECIPE_LIST_SELECT}, recipe_ingredients (quantity, ingredient_id, ingredients (name, pantry_type, category))`
 
 type RecipeSort = 'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'
 
@@ -134,84 +138,42 @@ function isDisplayNameSchemaError(error: { message?: string } | null): boolean {
   )
 }
 
-const RECIPE_WITH_INGREDIENTS_SELECT = `
-  ${RECIPE_LIST_SELECT},
-  recipe_ingredients (
-    quantity,
-    display_name,
-    ingredients (
-      name,
-      pantry_type,
-      category
-    )
-  )
-`
+const RECIPE_INGREDIENT_LINK_SELECT =
+  'quantity, display_name, ingredient_id, ingredients (name, pantry_type, category)'
 
-const RECIPE_WITH_INGREDIENTS_SELECT_LEGACY = `
-  ${RECIPE_LIST_SELECT},
-  recipe_ingredients (
-    quantity,
-    ingredients (
-      name,
-      pantry_type,
-      category
-    )
-  )
-`
+const RECIPE_INGREDIENT_LINK_SELECT_LEGACY =
+  'quantity, ingredient_id, ingredients (name, pantry_type, category)'
+
+function normalizeRecipeIngredientRows(
+  rows: NonNullable<RecipeRow['recipe_ingredients']>
+): RecipeIngredient[] {
+  return rows.map((ri) => ({
+    quantity: ri.quantity,
+    display_name: ri.display_name ?? null,
+    ingredient_id: ri.ingredient_id ?? null,
+    ingredients: Array.isArray(ri.ingredients)
+      ? (ri.ingredients[0] ?? null)
+      : ri.ingredients,
+  }))
+}
 
 function normalizeRecipes(rows: RecipeRow[]): Recipe[] {
   return rows.map((recipe) => ({
     ...recipe,
-    recipe_ingredients: (recipe.recipe_ingredients ?? []).map((ri) => ({
-      quantity: ri.quantity,
-      display_name: ri.display_name ?? null,
-      ingredients: Array.isArray(ri.ingredients)
-        ? (ri.ingredients[0] ?? null)
-        : ri.ingredients,
-    })),
+    meal_types: recipe.meal_types ?? [],
+    recipe_ingredients: normalizeRecipeIngredientRows(recipe.recipe_ingredients ?? []),
   }))
-}
-
-/** DB check constraint allows: low | medium | high */
-const EFFORT_LEVELS = ['low', 'medium', 'high'] as const
-type EffortLevel = (typeof EFFORT_LEVELS)[number]
-
-const EFFORT_LABELS: Record<EffortLevel, string> = {
-  low: 'Easy',
-  medium: 'Medium',
-  high: 'Hard',
-}
-
-function normalizeEffortLevel(level: string | null | undefined): EffortLevel {
-  const key = (level ?? '').toLowerCase()
-  if (key === 'low' || key === 'medium' || key === 'high') return key
-  if (key === 'easy') return 'low'
-  if (key === 'hard') return 'high'
-  return 'medium'
-}
-
-function effortLabel(level: string): string {
-  const normalized = normalizeEffortLevel(level)
-  return EFFORT_LABELS[normalized]
-}
-
-const DIETARY_TAGS = ['Dairy-free', 'Peanut-free', 'Baby-friendly', 'Toddler-friendly']
-
-const effortBadgeClass: Record<string, string> = {
-  low:    'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300',
-  medium: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
-  high:   'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300',
 }
 
 const inputClass = fieldInput
 
 const qtyInputClass =
-  'w-12 shrink-0 box-border border border-border rounded-xl px-1.5 py-2 text-sm bg-card text-primary outline-none focus:border-coral'
+  'w-[3.75rem] shrink-0 box-border border border-border rounded-xl px-1.5 py-2 text-sm bg-card text-primary outline-none focus:border-coral'
 
 type IngredientRow = {
   name: string
   quantity: string
-  /** Original import line (Google Doc / URL); used for display_name on save. */
+  /** Original imported line text; used for display_name on save. */
   importLineText: string | null
   isPantry: boolean
   catalogId: string | null
@@ -222,22 +184,22 @@ type IngredientRow = {
 
 type RecipeFormState = {
   name: string
-  effort_level: string
   prep_minutes: string
   cook_minutes: string
   instructions: string
   dietary_tags: string[]
+  meal_types: string[]
   source_url: string
   ingredients: IngredientRow[]
 }
 
 const emptyForm: RecipeFormState = {
   name: '',
-  effort_level: 'low',
   prep_minutes: '',
   cook_minutes: '',
   instructions: '',
   dietary_tags: [],
+  meal_types: [],
   source_url: '',
   ingredients: [
     { name: '', quantity: '', importLineText: null, isPantry: false, catalogId: null, catalogName: null, matchError: null },
@@ -246,27 +208,36 @@ const emptyForm: RecipeFormState = {
   ],
 }
 
+function formHasNamedIngredients(ingredients: IngredientRow[]): boolean {
+  return ingredients.some((i) => i.name.trim())
+}
+
 function recipeToForm(recipe: Recipe, catalog: CatalogIngredient[]): RecipeFormState {
+  const catalogById = new Map(catalog.map((c) => [c.id, c.name]))
   const rows = recipe.recipe_ingredients.map((ri) => {
     const savedDisplay = ri.display_name?.trim() || ''
+    const fromJoin = ri.ingredients?.name?.trim() || ''
+    const fromCatalog =
+      (ri.ingredient_id && catalogById.get(ri.ingredient_id)) || ''
+    const name = savedDisplay || fromJoin || fromCatalog
     return {
-      name: savedDisplay || ri.ingredients?.name || '',
+      name,
       quantity: ri.quantity ?? '',
       lineText: savedDisplay || undefined,
     }
   })
   const ingredients = classifyIngredientRows(
-    rows.filter((r) => r.name.trim()),
+    rows.filter((r) => r.name.trim() || r.quantity.trim()),
     catalog
   )
   return {
     name: recipe.name,
-    effort_level: normalizeEffortLevel(recipe.effort_level),
     prep_minutes: recipe.prep_minutes?.toString() ?? '',
     cook_minutes: recipe.cook_minutes?.toString() ?? '',
     instructions: recipe.instructions ?? '',
     dietary_tags: recipe.dietary_tags ?? [],
-    source_url: recipe.source_url ?? '',
+    meal_types: recipe.meal_types ?? [],
+    source_url: sanitizeRecipeSourceUrl(recipe.source_url) ?? '',
     ingredients:
       ingredients.length > 0
         ? ingredients
@@ -282,11 +253,11 @@ type RecipeFormPanelProps = {
   saving: boolean
   deleting?: boolean
   onNameChange: (value: string) => void
-  onEffortChange: (level: string) => void
   onPrepChange: (value: string) => void
   onCookChange: (value: string) => void
   onInstructionsChange: (value: string) => void
   onToggleTag: (tag: string) => void
+  onToggleMealType: (tag: string) => void
   onUpdateIngredient: (index: number, field: 'name' | 'quantity', value: string) => void
   onAddFreshIngredientRow: () => void
   onAddPantryIngredientRow: () => void
@@ -307,6 +278,8 @@ type RecipeFormPanelProps = {
   onSave: () => void
   onCancel: () => void
   onDelete?: () => void
+  onRestoreIngredientsFromSource?: () => void
+  restoringIngredients?: boolean
 }
 
 function SwapListsIcon() {
@@ -692,11 +665,11 @@ function RecipeFormPanel({
   saving,
   deleting = false,
   onNameChange,
-  onEffortChange,
   onPrepChange,
   onCookChange,
   onInstructionsChange,
   onToggleTag,
+  onToggleMealType,
   onUpdateIngredient,
   onAddFreshIngredientRow,
   onAddPantryIngredientRow,
@@ -709,7 +682,14 @@ function RecipeFormPanel({
   onSave,
   onCancel,
   onDelete,
+  onRestoreIngredientsFromSource,
+  restoringIngredients = false,
 }: RecipeFormPanelProps) {
+  const showIngredientRecovery =
+    Boolean(onRestoreIngredientsFromSource) &&
+    !formHasNamedIngredients(form.ingredients) &&
+    form.source_url.trim().length > 0
+
   return (
     <div className="surface-card p-4 sm:p-6 flex flex-col gap-4 min-w-0 max-w-full overflow-hidden">
       <div className="flex items-center justify-between gap-2 min-w-0">
@@ -723,6 +703,23 @@ function RecipeFormPanel({
         </button>
       </div>
 
+      {showIngredientRecovery && (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 flex flex-col gap-2">
+          <p className="text-sm text-amber-900 dark:text-amber-100">
+            No ingredients are stored for this recipe (links may have been removed earlier).
+            {' Pull them again from the original recipe URL, then save.'}
+          </p>
+          <button
+            type="button"
+            onClick={onRestoreIngredientsFromSource}
+            disabled={saving || deleting || restoringIngredients}
+            className={`${btnSecondary} text-sm self-start`}
+          >
+            {restoringIngredients ? 'Fetching ingredients…' : 'Restore ingredients from URL'}
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col gap-1">
         <label className="text-xs font-semibold text-muted uppercase tracking-wide">Name</label>
         <input
@@ -732,26 +729,6 @@ function RecipeFormPanel({
           placeholder="e.g. Spaghetti bolognese"
           className={inputClass}
         />
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-semibold text-muted uppercase tracking-wide">Effort level</label>
-        <div className="flex flex-wrap gap-2">
-          {EFFORT_LEVELS.map((level) => (
-            <button
-              key={level}
-              type="button"
-              onClick={() => onEffortChange(level)}
-              className={`text-sm px-4 py-1.5 rounded-full border transition-colors shrink-0 ${
-                form.effort_level === level
-                  ? 'bg-coral text-on-coral border-coral'
-                  : 'border-border text-muted hover:border-coral'
-              }`}
-            >
-              {EFFORT_LABELS[level]}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4 min-w-0">
@@ -774,6 +751,25 @@ function RecipeFormPanel({
             placeholder="30"
             className={inputClass}
           />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-semibold text-muted uppercase tracking-wide">Meal type</label>
+        <div className="flex flex-wrap gap-2">
+          {MEAL_TYPE_TAGS.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onToggleMealType(tag)}
+              className={`text-sm px-3 py-1.5 rounded-full border transition-colors ${mealTypeToggleClasses(
+                tag,
+                form.meal_types.includes(tag)
+              )}`}
+            >
+              {tag}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -913,10 +909,158 @@ function DeleteConfirmDialog({
   )
 }
 
-export default function Home() {
-  const [recipes, setRecipes] = useState<Recipe[]>([])
+type RecipeBankCardProps = {
+  recipe: Recipe
+  selectionMode: boolean
+  selected: boolean
+  onToggleSelect: () => void
+  onEnterSelection: () => void
+  onEdit: () => void
+}
+
+function RecipeBankCard({
+  recipe,
+  selectionMode,
+  selected,
+  onToggleSelect,
+  onEnterSelection,
+  onEdit,
+}: RecipeBankCardProps) {
+  const longPress = useLongPress(onEnterSelection)
+  const displaySourceUrl = sanitizeRecipeSourceUrl(recipe.source_url)
+
+  const handleClick = () => {
+    if (longPress.consumeLongPress()) return
+    if (selectionMode) onToggleSelect()
+  }
+
+  return (
+    <div
+      role={selectionMode ? 'button' : undefined}
+      tabIndex={selectionMode ? 0 : undefined}
+      onKeyDown={
+        selectionMode
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onToggleSelect()
+              }
+            }
+          : undefined
+      }
+      className={`${surfaceCard} p-5 transition-colors touch-manipulation ${
+        selectionMode ? 'cursor-pointer select-none' : 'hover:border-muted'
+      } ${selectionMode && selected ? 'border-coral ring-1 ring-coral' : ''}`}
+      onPointerDown={longPress.onPointerDown}
+      onPointerUp={longPress.onPointerUp}
+      onPointerLeave={longPress.onPointerLeave}
+      onPointerCancel={longPress.onPointerCancel}
+      onClick={handleClick}
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      <div className="flex items-start gap-3">
+        {selectionMode && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 shrink-0 rounded border-gray-300 dark:border-gray-600"
+            aria-label={
+              selected
+                ? `Deselect ${recipe.name}`
+                : `Select ${recipe.name} for deletion`
+            }
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <h2 className="text-base font-semibold text-primary">{recipe.name}</h2>
+            <div className="flex items-center gap-2 shrink-0">
+              {!selectionMode && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEdit()
+                  }}
+                  aria-label={`Edit ${recipe.name}`}
+                  className="p-1.5 rounded-lg text-muted hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                >
+                  <EditIcon />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {displaySourceUrl && (
+            <a
+              href={displaySourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                if (selectionMode) e.preventDefault()
+                e.stopPropagation()
+              }}
+              className="text-xs text-muted hover:text-gray-800 dark:hover:text-gray-200 underline underline-offset-2 mb-2 inline-block max-w-full truncate"
+              title={displaySourceUrl}
+            >
+              {shortenRecipeUrl(displaySourceUrl)}
+            </a>
+          )}
+
+          <div className="flex gap-4 text-xs text-muted mb-3">
+            {recipe.prep_minutes && <span>⏱ {recipe.prep_minutes} min prep</span>}
+            {recipe.cook_minutes && <span>🔥 {recipe.cook_minutes} min cook</span>}
+          </div>
+
+          {(recipe.meal_types?.length > 0 || recipe.dietary_tags?.length > 0) && (
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {recipe.meal_types?.map((tag) => (
+                <span
+                  key={`meal-${tag}`}
+                  className={`text-xs rounded-full px-2.5 py-0.5 border ${mealTypeBadgeClasses(tag)}`}
+                >
+                  {tag}
+                </span>
+              ))}
+              {recipe.dietary_tags?.map((tag) => (
+                <span
+                  key={`diet-${tag}`}
+                  className="text-xs bg-green-50 text-green-700 border border-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800 rounded-full px-2.5 py-0.5"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type RecipesPageClientProps = {
+  initialRecipes?: RecipeListItem[]
+  initialCatalog?: CatalogIngredient[]
+}
+
+export default function Home({
+  initialRecipes,
+  initialCatalog,
+}: RecipesPageClientProps = {}) {
+  const serverPrefetched =
+    initialRecipes !== undefined && initialCatalog !== undefined
+
+  const [recipes, setRecipes] = useState<Recipe[]>(() =>
+    (initialRecipes ?? []).map((recipe) => ({
+      ...recipe,
+      meal_types: recipe.meal_types ?? [],
+      source_url: sanitizeRecipeSourceUrl(recipe.source_url),
+    }))
+  )
   const [recipeSort, setRecipeSort] = useState<RecipeSort>('date-desc')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => !serverPrefetched)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -925,11 +1069,17 @@ export default function Home() {
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
   const [deleteAllError, setDeleteAllError] = useState<string | null>(null)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedRecipeIds, setSelectedRecipeIds] = useState<Set<string>>(
+    () => new Set()
+  )
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false)
+  const [batchDeleteError, setBatchDeleteError] = useState<string | null>(null)
+  const [batchDeleting, setBatchDeleting] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [form, setForm] = useState<RecipeFormState>(emptyForm)
   const [showAddChooser, setShowAddChooser] = useState(false)
   const [showImport, setShowImport] = useState(false)
-  const [importMode, setImportMode] = useState<'website' | 'google-doc'>('website')
   const [importInput, setImportInput] = useState('')
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
@@ -937,21 +1087,22 @@ export default function Home() {
   const [editingPendingImportIndex, setEditingPendingImportIndex] = useState<number | null>(
     null
   )
-  const [docImportCandidates, setDocImportCandidates] = useState<ImportedRecipe[] | null>(
-    null
-  )
-  const [selectedDocImportNames, setSelectedDocImportNames] = useState<Set<string>>(
-    () => new Set()
-  )
   const [batchSaving, setBatchSaving] = useState(false)
   const [batchError, setBatchError] = useState<string | null>(null)
-  const [ingredientCatalog, setIngredientCatalog] = useState<CatalogIngredient[]>([])
-  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [ingredientCatalog, setIngredientCatalog] = useState<CatalogIngredient[]>(
+    () => initialCatalog ?? []
+  )
+  const [catalogLoading, setCatalogLoading] = useState(() => !serverPrefetched)
   const [supportsRecipeDisplayName, setSupportsRecipeDisplayName] = useState(true)
   const [pendingRequestNames, setPendingRequestNames] = useState<Set<string>>(
     () => new Set()
   )
+  const [editingRecipeLoaded, setEditingRecipeLoaded] = useState<Recipe | null>(
+    null
+  )
+  const [restoringIngredients, setRestoringIngredients] = useState(false)
   const { user, isAdmin, loading: authLoading } = useAuth()
+  const userId = user?.id
 
   useEffect(() => {
     if (authLoading || isAdmin) return
@@ -990,13 +1141,17 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!user) return
+    if (!userId) return
 
-    loadRecipes()
-    fetchIngredientCatalog(supabase)
-      .then(setIngredientCatalog)
-      .catch((err) => console.error(err))
-      .finally(() => setCatalogLoading(false))
+    if (!serverPrefetched) {
+      void loadRecipes(userId)
+      fetchIngredientCatalog(supabase)
+        .then(setIngredientCatalog)
+        .catch((err) => console.error(err))
+        .finally(() => setCatalogLoading(false))
+    }
+
+    void clearLegacyGoogleDocSourceUrls(userId)
 
     supabase
       .from('recipe_ingredients')
@@ -1005,25 +1160,68 @@ export default function Home() {
       .then(({ error }) => {
         if (isDisplayNameSchemaError(error)) setSupportsRecipeDisplayName(false)
       })
-  }, [user?.id])
+  }, [userId, serverPrefetched])
 
-  async function loadRecipes() {
-    let userId: string
-    try {
-      userId = await getAuthUserId(supabase)
-    } catch {
-      setLoading(false)
+  useEffect(() => {
+    if (!editingId || !editingRecipeLoaded || ingredientCatalog.length === 0) {
+      return
+    }
+    setForm((f) => {
+      if (formHasNamedIngredients(f.ingredients)) return f
+      const next = recipeToForm(editingRecipeLoaded, ingredientCatalog)
+      if (!formHasNamedIngredients(next.ingredients)) return f
+      return {
+        ...f,
+        ingredients: applyPendingRequestFlags(next.ingredients),
+      }
+    })
+  }, [editingId, editingRecipeLoaded, ingredientCatalog])
+
+  async function clearLegacyGoogleDocSourceUrls(uid: string) {
+    const { data, error } = await supabase
+      .from('recipes')
+      .select('id, source_url')
+      .eq('user_id', uid)
+
+    if (error || !data?.length) return
+
+    const ids = data
+      .filter((r) => isGoogleDocSourceUrl(r.source_url))
+      .map((r) => r.id)
+    if (ids.length === 0) return
+
+    const { error: updateError } = await supabase
+      .from('recipes')
+      .update({ source_url: null })
+      .eq('user_id', uid)
+      .in('id', ids)
+
+    if (updateError) {
+      console.error(updateError)
       return
     }
 
+    setRecipes((prev) =>
+      prev.map((r) => (ids.includes(r.id) ? { ...r, source_url: null } : r))
+    )
+  }
+
+  async function loadRecipes(uid: string) {
     const { data, error } = await supabase
       .from('recipes')
       .select(RECIPE_LIST_SELECT)
-      .eq('user_id', userId)
+      .eq('user_id', uid)
     if (error) {
       console.error(error)
     } else {
-      setRecipes(normalizeRecipes(data ?? []))
+      setRecipes(
+        (data ?? []).map((recipe) => ({
+          ...recipe,
+          meal_types: recipe.meal_types ?? [],
+          source_url: sanitizeRecipeSourceUrl(recipe.source_url),
+          recipe_ingredients: [],
+        }))
+      )
     }
     setLoading(false)
   }
@@ -1037,6 +1235,15 @@ export default function Home() {
     }))
   }
 
+  function toggleMealType(tag: string) {
+    setForm((f) => ({
+      ...f,
+      meal_types: f.meal_types.includes(tag)
+        ? f.meal_types.filter((t) => t !== tag)
+        : [...f.meal_types, tag],
+    }))
+  }
+
   function resetImport(clearPending = true) {
     setShowImport(false)
     setImportInput('')
@@ -1044,8 +1251,6 @@ export default function Home() {
     setImporting(false)
     if (clearPending) {
       setPendingImports(null)
-      setDocImportCandidates(null)
-      setSelectedDocImportNames(new Set())
       setEditingPendingImportIndex(null)
       setBatchError(null)
     }
@@ -1056,39 +1261,6 @@ export default function Home() {
     setEditingPendingImportIndex(null)
     setForm(emptyForm)
     setFormError(null)
-  }
-
-  function toggleDocImportSelection(name: string) {
-    setSelectedDocImportNames((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
-  }
-
-  function selectAllDocImports() {
-    if (!docImportCandidates) return
-    setSelectedDocImportNames(new Set(docImportCandidates.map((r) => r.name)))
-  }
-
-  function selectNoDocImports() {
-    setSelectedDocImportNames(new Set())
-  }
-
-  function confirmDocImportSelection() {
-    if (!docImportCandidates?.length) return
-    const selected = docImportCandidates.filter((r) =>
-      selectedDocImportNames.has(r.name)
-    )
-    if (selected.length === 0) {
-      setImportError('Select at least one recipe to import.')
-      return
-    }
-    setImportError(null)
-    setPendingImports(selected)
-    setDocImportCandidates(null)
-    setSelectedDocImportNames(new Set())
   }
 
   function importedToFormState(imported: ImportedRecipe): RecipeFormState {
@@ -1210,6 +1382,7 @@ export default function Home() {
   }
 
   function openAddChooser() {
+    exitSelectionMode()
     resetImport(true)
     setEditingId(null)
     setForm(emptyForm)
@@ -1226,13 +1399,12 @@ export default function Home() {
     setShowForm(true)
   }
 
-  function selectAddImport(mode: 'website' | 'google-doc') {
+  function selectAddImport() {
     setShowAddChooser(false)
     setShowForm(false)
     setEditingId(null)
     setForm(emptyForm)
     setFormError(null)
-    setImportMode(mode)
     setShowImport(true)
     setImportError(null)
     setImportInput('')
@@ -1251,32 +1423,195 @@ export default function Home() {
     setShowAddChooser(true)
   }
 
-  async function openEditForm(recipe: Recipe) {
-    setFormError(null)
+  async function fetchRecipeIngredientsFallback(
+    recipeId: string
+  ): Promise<RecipeIngredient[]> {
+    type LinkRow = NonNullable<RecipeRow['recipe_ingredients']>[number]
+    let rows: LinkRow[] | null = null
+    let fetchError: { message?: string } | null = null
 
-    const { data, error } = await supabase
-      .from('recipes')
+    const first = await supabase
+      .from('recipe_ingredients')
       .select(
         supportsRecipeDisplayName
-          ? RECIPE_WITH_INGREDIENTS_SELECT
-          : RECIPE_WITH_INGREDIENTS_SELECT_LEGACY
+          ? RECIPE_INGREDIENT_LINK_SELECT
+          : RECIPE_INGREDIENT_LINK_SELECT_LEGACY
       )
-      .eq('id', recipe.id)
-      .eq('user_id', user?.id ?? '')
+      .eq('recipe_id', recipeId)
+    rows = first.data as LinkRow[] | null
+    fetchError = first.error
+
+    if (
+      fetchError &&
+      supportsRecipeDisplayName &&
+      isDisplayNameSchemaError(fetchError)
+    ) {
+      setSupportsRecipeDisplayName(false)
+      const retry = await supabase
+        .from('recipe_ingredients')
+        .select(RECIPE_INGREDIENT_LINK_SELECT_LEGACY)
+        .eq('recipe_id', recipeId)
+      rows = retry.data as LinkRow[] | null
+      fetchError = retry.error
+    }
+
+    if (fetchError || !rows?.length) return []
+    return normalizeRecipeIngredientRows(rows)
+  }
+
+  async function fetchRecipeForEdit(recipeId: string): Promise<{
+    recipe: Recipe | null
+    loadWarning: string | null
+  }> {
+    let userId: string
+    try {
+      userId = await getAuthUserId(supabase)
+    } catch {
+      return { recipe: null, loadWarning: 'Not signed in.' }
+    }
+
+    const recipeSelect = supportsRecipeDisplayName
+      ? RECIPE_WITH_INGREDIENTS_SELECT
+      : RECIPE_WITH_INGREDIENTS_SELECT_LEGACY
+
+    let { data, error } = await supabase
+      .from('recipes')
+      .select(recipeSelect)
+      .eq('id', recipeId)
+      .eq('user_id', userId)
       .single()
 
+    if (error && supportsRecipeDisplayName && isDisplayNameSchemaError(error)) {
+      setSupportsRecipeDisplayName(false)
+      const retry = await supabase
+        .from('recipes')
+        .select(RECIPE_WITH_INGREDIENTS_SELECT_LEGACY)
+        .eq('id', recipeId)
+        .eq('user_id', userId)
+        .single()
+      data = retry.data
+      error = retry.error
+    }
+
     if (error || !data) {
-      setFormError(error?.message ?? 'Could not load recipe for editing.')
+      return {
+        recipe: null,
+        loadWarning: error?.message ?? 'Could not load recipe for editing.',
+      }
+    }
+
+    let loaded = normalizeRecipes([data])[0]
+
+    if (loaded.recipe_ingredients.length === 0) {
+      const fallback = await fetchRecipeIngredientsFallback(recipeId)
+      if (fallback.length > 0) {
+        loaded = { ...loaded, recipe_ingredients: fallback }
+      }
+    }
+
+    const linksLoaded = loaded.recipe_ingredients.length > 0
+
+    let loadWarning: string | null = null
+    if (!linksLoaded) {
+      loadWarning = loaded.source_url?.trim()
+        ? 'No ingredients loaded. Use “Restore ingredients from URL” below, then Update recipe — do not save an empty form.'
+        : 'No ingredients loaded. Run docs/supabase-recipe-ingredients-diagnostic.sql in Supabase.'
+    }
+
+    return { recipe: loaded, loadWarning }
+  }
+
+  async function ensureIngredientCatalog(): Promise<CatalogIngredient[]> {
+    if (ingredientCatalog.length > 0) return ingredientCatalog
+    const catalog = await fetchIngredientCatalog(supabase)
+    setIngredientCatalog(catalog)
+    setCatalogLoading(false)
+    return catalog
+  }
+
+  function applyImportedToFormFields(imported: ImportedRecipe, catalog: CatalogIngredient[]) {
+    const fields = importedToFormFields(imported)
+    const classified = classifyIngredientRows(
+      fields.ingredients.filter((i) => i.name.trim()),
+      catalog
+    )
+    return { fields, classified }
+  }
+
+  async function restoreIngredientsFromSource() {
+    const sourceRaw = form.source_url.trim()
+    if (!sourceRaw) {
+      setFormError('Add a source link before restoring ingredients.')
       return
     }
 
+    const websiteUrl = normalizeImportUrl(sourceRaw)
+    if (!websiteUrl) {
+      setFormError('Add a valid source URL before restoring ingredients.')
+      return
+    }
+
+    setRestoringIngredients(true)
+    setFormError(null)
+    try {
+      const catalog = await ensureIngredientCatalog()
+      const res = await fetch('/api/recipes/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: websiteUrl }),
+      })
+      const body = (await res.json()) as { recipe?: ImportedRecipe; error?: string }
+      if (!res.ok || !body.recipe) {
+        setFormError(body.error ?? 'Could not fetch ingredients from that URL.')
+        return
+      }
+      const imported = body.recipe
+
+      const { fields, classified } = applyImportedToFormFields(imported, catalog)
+      if (classified.length === 0) {
+        setFormError('No ingredients found to restore.')
+        return
+      }
+
+      setForm((f) => ({
+        ...f,
+        ingredients: applyPendingRequestFlags(classified),
+        instructions: f.instructions.trim() ? f.instructions : fields.instructions,
+        prep_minutes: f.prep_minutes.trim() ? f.prep_minutes : fields.prep_minutes,
+        cook_minutes: f.cook_minutes.trim() ? f.cook_minutes : fields.cook_minutes,
+      }))
+      setFormError('Ingredients restored from URL — review them, then click Update recipe to save.')
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Restore failed.')
+    } finally {
+      setRestoringIngredients(false)
+    }
+  }
+
+  async function openEditForm(recipe: Recipe) {
+    exitSelectionMode()
+    setFormError(null)
+    setEditingRecipeLoaded(null)
+
+    const { recipe: loaded, loadWarning } = await fetchRecipeForEdit(recipe.id)
+
+    if (!loaded) {
+      setFormError(loadWarning ?? 'Could not load recipe for editing.')
+      return
+    }
+
+    const catalog = await ensureIngredientCatalog()
     setShowForm(false)
     setEditingId(recipe.id)
-    const nextForm = recipeToForm(normalizeRecipes([data])[0], ingredientCatalog)
+    setEditingRecipeLoaded(loaded)
+    const nextForm = recipeToForm(loaded, catalog)
     setForm({
       ...nextForm,
       ingredients: applyPendingRequestFlags(nextForm.ingredients),
     })
+    if (loadWarning && !formHasNamedIngredients(nextForm.ingredients)) {
+      setFormError(loadWarning)
+    }
   }
 
   function cancelForm() {
@@ -1284,6 +1619,9 @@ export default function Home() {
       cancelPendingImportEdit()
       return
     }
+    exitSelectionMode()
+    setEditingRecipeLoaded(null)
+    setRestoringIngredients(false)
     setShowForm(false)
     setEditingId(null)
     setForm(emptyForm)
@@ -1298,28 +1636,18 @@ export default function Home() {
     showAddChooser ||
     showImport ||
     (showForm && !editingId) ||
-    (pendingImports != null && pendingImports.length > 0) ||
-    (docImportCandidates != null && docImportCandidates.length > 0)
+    (pendingImports != null && pendingImports.length > 0)
 
   async function handleImport() {
     setImportError(null)
     if (!importInput.trim()) {
-      setImportError(
-        importMode === 'google-doc'
-          ? 'Paste a Google Docs link.'
-          : 'Paste a recipe URL.'
-      )
+      setImportError('Paste a recipe URL.')
       return
     }
 
     setImporting(true)
     try {
-      const endpoint =
-        importMode === 'google-doc'
-          ? '/api/recipes/import/google-docs'
-          : '/api/recipes/import'
-
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/recipes/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: importInput.trim() }),
@@ -1327,34 +1655,6 @@ export default function Home() {
       const data = await res.json()
       if (!res.ok) {
         setImportError(data.error ?? 'Import failed.')
-        return
-      }
-
-      if (importMode === 'google-doc') {
-        const recipes: ImportedRecipe[] = Array.isArray(data.recipes)
-          ? data.recipes
-          : data.recipe
-            ? [data.recipe]
-            : []
-
-        if (recipes.length === 0) {
-          setImportError('No recipes found in document.')
-          return
-        }
-
-        if (recipes.length === 1) {
-          setEditingId(null)
-          setForm(importedToFormState(recipes[0]))
-          resetImport()
-          setShowForm(true)
-          setFormError(null)
-          return
-        }
-
-        setDocImportCandidates(recipes)
-        setSelectedDocImportNames(new Set(recipes.map((r) => r.name)))
-        setImportError(null)
-        resetImport(false)
         return
       }
 
@@ -1437,7 +1737,7 @@ export default function Home() {
     }
 
     const matchText = row.importLineText?.trim() || row.name
-    const classified = classifyIngredientLine(matchText, ingredientCatalog)
+    const classified = classifyIngredientLineRelaxed(matchText, ingredientCatalog)
     if (!classified.catalogId) {
       return { error: classified.matchError ?? 'Ingredient not in bank.' }
     }
@@ -1454,6 +1754,22 @@ export default function Home() {
     ingredients: IngredientRow[]
   ): Promise<string | null> {
     const validIngredients = ingredients.filter((i) => i.name.trim())
+
+    const { count, error: countError } = await supabase
+      .from('recipe_ingredients')
+      .select('*', { count: 'exact', head: true })
+      .eq('recipe_id', recipeId)
+
+    if (
+      !countError &&
+      (count ?? 0) > 0 &&
+      validIngredients.length === 0
+    ) {
+      return (
+        'Ingredient links exist in the database but none are shown in the form. ' +
+        'Reload and try again — saving now would erase your recipe ingredients.'
+      )
+    }
 
     const { error: deleteError } = await supabase
       .from('recipe_ingredients')
@@ -1521,12 +1837,12 @@ export default function Home() {
       .insert({
         user_id: userId,
         name: imported.name.trim(),
-        effort_level: 'low',
         prep_minutes: imported.prep_minutes ? parseInt(imported.prep_minutes) : null,
         cook_minutes: imported.cook_minutes ? parseInt(imported.cook_minutes) : null,
         instructions: imported.instructions.trim() || null,
         dietary_tags: [],
-        source_url: imported.source_url.trim() || null,
+        meal_types: [],
+        source_url: sanitizeRecipeSourceUrl(imported.source_url),
       })
       .select('id')
       .single()
@@ -1561,7 +1877,7 @@ export default function Home() {
             : err
         )
         setBatchSaving(false)
-        loadRecipes()
+        if (userId) void loadRecipes(userId)
         return
       }
       saved++
@@ -1569,7 +1885,7 @@ export default function Home() {
 
     setPendingImports(null)
     setBatchSaving(false)
-    loadRecipes()
+    if (userId) void loadRecipes(userId)
   }
 
   function openPendingForEdit(index: number) {
@@ -1615,12 +1931,12 @@ export default function Home() {
       .insert({
         user_id: userId,
         name: form.name.trim(),
-        effort_level: normalizeEffortLevel(form.effort_level),
         prep_minutes: form.prep_minutes ? parseInt(form.prep_minutes) : null,
         cook_minutes: form.cook_minutes ? parseInt(form.cook_minutes) : null,
         instructions: form.instructions.trim() || null,
         dietary_tags: form.dietary_tags,
-        source_url: form.source_url.trim() || null,
+        meal_types: form.meal_types,
+        source_url: sanitizeRecipeSourceUrl(form.source_url),
       })
       .select('id')
       .single()
@@ -1645,7 +1961,7 @@ export default function Home() {
       cancelForm()
     }
     setSaving(false)
-    loadRecipes()
+    if (userId) void loadRecipes(userId)
   }
 
   async function handleUpdate() {
@@ -1672,12 +1988,12 @@ export default function Home() {
       .from('recipes')
       .update({
         name: form.name.trim(),
-        effort_level: normalizeEffortLevel(form.effort_level),
         prep_minutes: form.prep_minutes ? parseInt(form.prep_minutes) : null,
         cook_minutes: form.cook_minutes ? parseInt(form.cook_minutes) : null,
         instructions: form.instructions.trim() || null,
         dietary_tags: form.dietary_tags,
-        source_url: form.source_url.trim() || null,
+        meal_types: form.meal_types,
+        source_url: sanitizeRecipeSourceUrl(form.source_url),
       })
       .eq('id', editingId)
       .eq('user_id', user?.id ?? '')
@@ -1733,34 +2049,9 @@ export default function Home() {
     setFormError(null)
     setDeleting(true)
 
-    const { error: linksError } = await supabase
-      .from('recipe_ingredients')
-      .delete()
-      .eq('recipe_id', editingId)
-
-    if (linksError) {
-      setFormError(`Failed to delete ingredients: ${linksError.message}`)
-      setDeleting(false)
-      return
-    }
-
-    const { data: deleted, error: recipeError } = await supabase
-      .from('recipes')
-      .delete()
-      .eq('id', editingId)
-      .eq('user_id', user?.id ?? '')
-      .select('id')
-
-    if (recipeError) {
-      setFormError(recipeError.message ?? 'Failed to delete recipe.')
-      setDeleting(false)
-      return
-    }
-
-    if (!deleted?.length) {
-      setFormError(
-        'Recipe could not be deleted. Run docs/supabase-enable-delete.sql in the Supabase SQL editor, then try again.'
-      )
+    const err = await deleteRecipesByIds([editingId])
+    if (err) {
+      setFormError(err)
       setDeleting(false)
       return
     }
@@ -1782,31 +2073,39 @@ export default function Home() {
     setDeleteAllError(null)
   }
 
-  async function confirmDeleteAll() {
-    if (recipes.length === 0) return
+  function exitSelectionMode() {
+    setSelectionMode(false)
+    setSelectedRecipeIds(new Set())
+    setBatchDeleteError(null)
+    setShowBatchDeleteConfirm(false)
+  }
 
-    setDeleteAllError(null)
-    setDeletingAll(true)
-    const ids = recipes.map((r) => r.id)
-
-    const { error: linksError } = await supabase
-      .from('recipe_ingredients')
-      .delete()
-      .in('recipe_id', ids)
-
-    if (linksError) {
-      setDeleteAllError(`Failed to delete ingredients: ${linksError.message}`)
-      setDeletingAll(false)
-      return
+  function enterSelectionMode(recipeId: string) {
+    if (editingId && editingId !== recipeId) cancelForm()
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(40)
     }
+    setSelectionMode(true)
+    setSelectedRecipeIds(new Set([recipeId]))
+  }
+
+  function toggleRecipeSelection(recipeId: string) {
+    setSelectedRecipeIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(recipeId)) next.delete(recipeId)
+      else next.add(recipeId)
+      return next
+    })
+  }
+
+  async function deleteRecipesByIds(ids: string[]): Promise<string | null> {
+    if (ids.length === 0) return null
 
     let userId: string
     try {
       userId = await getAuthUserId(supabase)
     } catch {
-      setDeleteAllError('Not signed in.')
-      setDeletingAll(false)
-      return
+      return 'Not signed in.'
     }
 
     const { data: deleted, error: recipeError } = await supabase
@@ -1817,23 +2116,82 @@ export default function Home() {
       .select('id')
 
     if (recipeError) {
-      setDeleteAllError(recipeError.message ?? 'Failed to delete recipes.')
-      setDeletingAll(false)
-      return
+      return recipeError.message ?? 'Failed to delete recipes.'
     }
 
     if (!deleted?.length) {
-      setDeleteAllError(
-        'Recipes could not be deleted. Run docs/supabase-enable-delete.sql in the Supabase SQL editor, then try again.'
+      return (
+        'Recipes could not be deleted (check user_id on recipes and docs/supabase-enable-delete.sql). ' +
+        'Ingredient links were not removed first, so your data should still be intact.'
       )
+    }
+
+    const deletedIds = deleted.map((r) => r.id)
+    const { error: linksError } = await supabase
+      .from('recipe_ingredients')
+      .delete()
+      .in('recipe_id', deletedIds)
+
+    if (linksError) {
+      return `Recipes deleted but ingredient cleanup failed: ${linksError.message}`
+    }
+
+    return null
+  }
+
+  async function confirmDeleteAll() {
+    if (recipes.length === 0) return
+
+    setDeleteAllError(null)
+    setDeletingAll(true)
+    const ids = recipes.map((r) => r.id)
+    const err = await deleteRecipesByIds(ids)
+
+    if (err) {
+      setDeleteAllError(err)
       setDeletingAll(false)
       return
     }
 
     setShowDeleteAllConfirm(false)
     cancelForm()
+    exitSelectionMode()
     setDeletingAll(false)
-    loadRecipes()
+    setRecipes([])
+    if (userId) void loadRecipes(userId)
+  }
+
+  function requestBatchDelete() {
+    if (selectedRecipeIds.size === 0) return
+    setBatchDeleteError(null)
+    setShowBatchDeleteConfirm(true)
+  }
+
+  function cancelBatchDeleteConfirm() {
+    setShowBatchDeleteConfirm(false)
+    setBatchDeleteError(null)
+  }
+
+  async function confirmBatchDelete() {
+    const ids = [...selectedRecipeIds]
+    if (ids.length === 0) return
+
+    setBatchDeleteError(null)
+    setBatchDeleting(true)
+    const err = await deleteRecipesByIds(ids)
+
+    if (err) {
+      setBatchDeleteError(err)
+      setBatchDeleting(false)
+      return
+    }
+
+    setShowBatchDeleteConfirm(false)
+    cancelForm()
+    const idSet = new Set(ids)
+    setRecipes((prev) => prev.filter((r) => !idSet.has(r.id)))
+    exitSelectionMode()
+    setBatchDeleting(false)
   }
 
   const sortedRecipes = useMemo(
@@ -1846,11 +2204,11 @@ export default function Home() {
     formError,
     saving,
     onNameChange: (value: string) => setForm(f => ({ ...f, name: value })),
-    onEffortChange: (level: string) => setForm(f => ({ ...f, effort_level: level })),
     onPrepChange: (value: string) => setForm(f => ({ ...f, prep_minutes: value })),
     onCookChange: (value: string) => setForm(f => ({ ...f, cook_minutes: value })),
     onInstructionsChange: (value: string) => setForm(f => ({ ...f, instructions: value })),
     onToggleTag: toggleTag,
+    onToggleMealType: toggleMealType,
     onUpdateIngredient: updateIngredient,
     onAddFreshIngredientRow: addFreshIngredientRow,
     onAddPantryIngredientRow: addPantryIngredientRow,
@@ -1862,8 +2220,12 @@ export default function Home() {
     isAdmin,
   }
 
+  const selectedCount = selectedRecipeIds.size
+
   return (
-    <main className="max-w-2xl mx-auto px-4 sm:px-6 py-10 min-w-0 w-full overflow-x-hidden">
+    <main
+      className={`max-w-2xl mx-auto px-4 sm:px-6 py-10 min-w-0 w-full overflow-x-hidden ${selectionMode ? 'pb-24' : ''}`}
+    >
       <div className="flex items-start justify-between gap-4 mb-1">
         <h1 className={`text-2xl font-semibold text-primary ${pageTitleAccent}`}>
           📚 Recipe bank
@@ -1876,7 +2238,14 @@ export default function Home() {
           {isAddingRecipe ? 'Cancel' : '+ Add recipe'}
         </button>
       </div>
-      <p className={`text-sm ${textMuted} mb-8`}>Your saved family recipes</p>
+      <p className={`text-sm ${textMuted} mb-8`}>
+        Your saved family recipes
+        {!loading && recipes.length > 0 && !selectionMode && (
+          <span className="block mt-1">
+            Press and hold a recipe to select several for batch delete.
+          </span>
+        )}
+      </p>
 
       {showAddChooser && (
         <div className="surface-card p-4 sm:p-6 mb-6 flex flex-col gap-4 min-w-0 max-w-full overflow-hidden">
@@ -1897,22 +2266,12 @@ export default function Home() {
             </button>
             <button
               type="button"
-              onClick={() => selectAddImport('website')}
+              onClick={selectAddImport}
               className="text-left text-sm font-medium border border-border text-primary rounded-lg px-4 py-3 hover:border-muted transition-colors"
             >
               Import from URL
               <span className="block text-xs font-normal text-muted mt-0.5">
                 Paste a link from a recipe website
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={() => selectAddImport('google-doc')}
-              className="text-left text-sm font-medium border border-border text-primary rounded-lg px-4 py-3 hover:border-muted transition-colors"
-            >
-              Import from Google Doc
-              <span className="block text-xs font-normal text-muted mt-0.5">
-                Paste a shared doc with Heading 1 recipes
               </span>
             </button>
           </div>
@@ -1922,9 +2281,7 @@ export default function Home() {
       {showImport && (
         <div className="surface-card p-4 sm:p-6 mb-6 flex flex-col gap-4 min-w-0 max-w-full overflow-hidden">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-primary">
-              {importMode === 'google-doc' ? 'Import from Google Doc' : 'Import from URL'}
-            </h2>
+            <h2 className="text-base font-semibold text-primary">Import from URL</h2>
             <button
               type="button"
               onClick={backToAddChooser}
@@ -1933,33 +2290,15 @@ export default function Home() {
               ← Back
             </button>
           </div>
-          {importMode === 'google-doc' ? (
-            <p className="text-sm text-muted">
-              Paste your Google Docs link (shared as{' '}
-              <span className="font-medium text-gray-700 dark:text-gray-300">
-                Anyone with the link → Viewer
-              </span>
-              ). Each recipe uses <span className="font-medium">Heading 1</span> for the title, and{' '}
-              <span className="font-medium">Heading 2</span> for{' '}
-              <span className="font-medium">Ingredients</span> and{' '}
-              <span className="font-medium">Method</span>. If the doc has several recipes, you can
-              choose which Heading 1 titles to import.
-            </p>
-          ) : (
-            <p className="text-sm text-muted">
-              Paste a link from a recipe site.
-            </p>
-          )}
+          <p className="text-sm text-muted">
+            Paste a link from a recipe site.
+          </p>
           <input
             type="url"
             value={importInput}
             onChange={(e) => setImportInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && !importing && handleImport()}
-            placeholder={
-              importMode === 'google-doc'
-                ? 'https://docs.google.com/document/d/.../edit'
-                : 'https://www.recipetineats.com/lentil-soup/'
-            }
+            placeholder="https://www.recipetineats.com/lentil-soup/"
             className={inputClass}
             disabled={importing}
           />
@@ -1970,83 +2309,8 @@ export default function Home() {
             disabled={importing}
             className="btn-primary px-4 py-2.5 text-sm disabled:opacity-50 transition-colors"
           >
-            {importing ? 'Importing...' : importMode === 'google-doc' ? 'Import recipes' : 'Import recipe'}
+            {importing ? 'Importing...' : 'Import recipe'}
           </button>
-        </div>
-      )}
-
-      {docImportCandidates && docImportCandidates.length > 0 && (
-        <div className="surface-card p-6 mb-6 flex flex-col gap-4">
-          <h2 className="text-base font-semibold text-primary">
-            {docImportCandidates.length} recipes found — select Heading 1 to import
-          </h2>
-          <p className="text-sm text-muted">
-            Tick the recipes you want, then continue to review and save.
-          </p>
-          <div className="flex flex-wrap gap-3 text-sm">
-            <button
-              type="button"
-              onClick={selectAllDocImports}
-              className="text-primary/80 hover:text-gray-900 dark:hover:text-gray-100 underline underline-offset-2"
-            >
-              Select all
-            </button>
-            <button
-              type="button"
-              onClick={selectNoDocImports}
-              className="text-primary/80 hover:text-gray-900 dark:hover:text-gray-100 underline underline-offset-2"
-            >
-              Select none
-            </button>
-            <span className="text-muted">
-              {selectedDocImportNames.size} of {docImportCandidates.length} selected
-            </span>
-          </div>
-          <ul className="flex flex-col gap-2">
-            {docImportCandidates.map((recipe) => {
-              const checked = selectedDocImportNames.has(recipe.name)
-              return (
-                <li key={recipe.name}>
-                  <label className="flex items-start gap-3 border border-gray-100 dark:border-gray-800 rounded-lg px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggleDocImportSelection(recipe.name)}
-                      className="mt-0.5 shrink-0 rounded border-gray-300 dark:border-gray-600"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-primary">
-                        {recipe.name}
-                      </p>
-                      <p className="text-xs text-muted mt-0.5">
-                        {recipe.ingredients.filter((i) => i.name.trim()).length} ingredients
-                        {recipe.instructions.trim() ? ' · method included' : ''}
-                      </p>
-                    </div>
-                  </label>
-                </li>
-              )
-            })}
-          </ul>
-          {importError && <p className="text-red-500 text-sm">{importError}</p>}
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              type="button"
-              onClick={confirmDocImportSelection}
-              disabled={selectedDocImportNames.size === 0}
-              className="btn-primary px-4 py-2.5 text-sm disabled:opacity-50 transition-colors"
-            >
-              Continue with {selectedDocImportNames.size} recipe
-              {selectedDocImportNames.size === 1 ? '' : 's'}
-            </button>
-            <button
-              type="button"
-              onClick={() => resetImport(true)}
-              className="border border-border text-gray-700 dark:text-gray-200 rounded-lg px-4 py-2.5 text-sm font-medium hover:border-muted transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
         </div>
       )}
 
@@ -2183,72 +2447,61 @@ export default function Home() {
               onCancel={cancelForm}
               onDelete={requestDelete}
               deleting={deleting}
+              onRestoreIngredientsFromSource={restoreIngredientsFromSource}
+              restoringIngredients={restoringIngredients}
             />
           ) : (
-            <div
+            <RecipeBankCard
               key={recipe.id}
-              className={`${surfaceCard} p-5 hover:border-muted transition-colors`}
-            >
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <h2 className="text-base font-semibold text-primary">{recipe.name}</h2>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => openEditForm(recipe)}
-                    aria-label={`Edit ${recipe.name}`}
-                    className="p-1.5 rounded-lg text-muted hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                  >
-                    <EditIcon />
-                  </button>
-                  {recipe.effort_level && (
-                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${effortBadgeClass[normalizeEffortLevel(recipe.effort_level)] ?? 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'}`}>
-                      {effortLabel(recipe.effort_level)}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {recipe.source_url && (
-                <a
-                  href={recipe.source_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-muted hover:text-gray-800 dark:hover:text-gray-200 underline underline-offset-2 mb-2 inline-block max-w-full truncate"
-                  title={recipe.source_url}
-                >
-                  {shortenRecipeUrl(recipe.source_url)}
-                </a>
-              )}
-
-              <div className="flex gap-4 text-xs text-muted mb-3">
-                {recipe.prep_minutes && <span>⏱ {recipe.prep_minutes} min prep</span>}
-                {recipe.cook_minutes && <span>🔥 {recipe.cook_minutes} min cook</span>}
-              </div>
-
-              {recipe.dietary_tags?.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {recipe.dietary_tags.map(tag => (
-                    <span key={tag} className="text-xs bg-green-50 text-green-700 border border-green-100 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800 rounded-full px-2.5 py-0.5">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+              recipe={recipe}
+              selectionMode={selectionMode}
+              selected={selectedRecipeIds.has(recipe.id)}
+              onToggleSelect={() => toggleRecipeSelection(recipe.id)}
+              onEnterSelection={() => {
+                if (!selectionMode) enterSelectionMode(recipe.id)
+              }}
+              onEdit={() => openEditForm(recipe)}
+            />
           )
         )}
       </div>
 
-      {!loading && recipes.length > 0 && (
+      {!loading && recipes.length > 0 && !selectionMode && (
         <div className="mt-8 pt-6 border-t border-border">
           <button
             type="button"
             onClick={requestDeleteAll}
-            disabled={deletingAll || deleting}
+            disabled={deletingAll || deleting || batchDeleting}
             className="w-full text-sm font-medium text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-50 transition-colors"
           >
             Delete all recipes
           </button>
+        </div>
+      )}
+
+      {selectionMode && (
+        <div className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-base/95 backdrop-blur-sm px-4 py-3">
+          <div className="max-w-2xl mx-auto flex items-center gap-3">
+            <button
+              type="button"
+              onClick={exitSelectionMode}
+              disabled={batchDeleting}
+              className="text-sm text-muted hover:text-gray-700 dark:hover:text-gray-200 disabled:opacity-50 shrink-0"
+            >
+              Cancel
+            </button>
+            <p className="flex-1 text-sm text-primary text-center">
+              {selectedCount} selected
+            </p>
+            <button
+              type="button"
+              onClick={requestBatchDelete}
+              disabled={selectedCount === 0 || batchDeleting}
+              className="text-sm font-medium text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 disabled:opacity-50 shrink-0"
+            >
+              Delete
+            </button>
+          </div>
         </div>
       )}
 
@@ -2285,6 +2538,27 @@ export default function Home() {
               {recipes.length} recipe{recipes.length === 1 ? '' : 's'}
             </span>{' '}
             in your recipe bank. This cannot be undone.
+          </p>
+        </DeleteConfirmDialog>
+      )}
+
+      {showBatchDeleteConfirm && (
+        <DeleteConfirmDialog
+          title={
+            selectedCount === 1 ? 'Delete recipe?' : `Delete ${selectedCount} recipes?`
+          }
+          error={batchDeleteError}
+          deleting={batchDeleting}
+          onConfirm={confirmBatchDelete}
+          onCancel={cancelBatchDeleteConfirm}
+          confirmLabel={selectedCount === 1 ? 'Delete' : `Delete ${selectedCount}`}
+        >
+          <p>
+            This will permanently delete{' '}
+            <span className="font-medium text-primary">
+              {selectedCount} recipe{selectedCount === 1 ? '' : 's'}
+            </span>
+            . This cannot be undone.
           </p>
         </DeleteConfirmDialog>
       )}

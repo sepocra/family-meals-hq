@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppNav } from "../components/AppNav";
 import { AppProviders } from "../components/AppProviders";
+import { getServerSession } from "../lib/server-auth";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,13 +31,14 @@ export default async function RootLayout({
   params: Promise<Record<string, string | string[]>>;
 }>) {
   await params;
+  const session = await getServerSession();
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-base text-primary antialiased">
-        <AppProviders>
+        <AppProviders initialSession={session}>
           <AppNav />
           {children}
         </AppProviders>

@@ -19,15 +19,16 @@ export function AppNav() {
     return null
   }
 
-  if (loading) {
-    return (
-      <header className="sticky top-0 z-50 border-b border-border bg-base/95 px-4 py-3">
-        <p className="text-xs text-muted">Loading…</p>
-      </header>
-    )
+  if (!user) {
+    if (loading) {
+      return (
+        <header className="sticky top-0 z-50 border-b border-border bg-base/95 px-4 py-3">
+          <p className="text-xs text-muted">Loading…</p>
+        </header>
+      )
+    }
+    return null
   }
-
-  if (!user) return null
 
   return (
     <header className="sticky top-0 z-50 w-full max-w-[100vw] overflow-x-hidden border-b border-border bg-base/95 backdrop-blur-sm">

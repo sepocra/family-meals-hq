@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import { useCallback, useEffect, useState } from 'react'
 import { btnPrimary } from '../lib/brand-classes'
 import { fetchPendingIngredientRequests } from '../lib/ingredient-requests'
-import { createClient } from '../lib/supabase/client'
+import { supabase } from '../lib/supabase'
 import { useAuth } from './AuthProvider'
 
 const ADMIN_REQUESTS_PATH = '/admin/ingredient-requests'
@@ -13,7 +13,6 @@ const ADMIN_REQUESTS_PATH = '/admin/ingredient-requests'
 export function AdminPendingBanner() {
   const pathname = usePathname()
   const { isAdmin, loading } = useAuth()
-  const supabase = createClient()
   const [pendingCount, setPendingCount] = useState(0)
 
   const refresh = useCallback(async () => {
@@ -24,7 +23,7 @@ export function AdminPendingBanner() {
     } catch (err) {
       console.error(err)
     }
-  }, [isAdmin, supabase])
+  }, [isAdmin])
 
   useEffect(() => {
     if (loading || !isAdmin) {

@@ -80,6 +80,14 @@ export function getMealsForShopping(): WeeklyMealSuggestion[] {
     .filter((r): r is WeeklyMealSuggestion => r != null)
 }
 
+export function formatFreshInventoryMatch(produceMatched: number, meatMatched: number): string {
+  const parts: string[] = []
+  if (produceMatched > 0) parts.push(`${produceMatched} fruit/veg`)
+  if (meatMatched > 0) parts.push(`${meatMatched} meat`)
+  if (parts.length === 0) return 'nothing in stock'
+  return `${parts.join(' · ')} in stock`
+}
+
 export function formatWeeklyMealsRefreshed(iso: string): string {
   const date = new Date(iso)
   const now = new Date()

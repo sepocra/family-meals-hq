@@ -22,14 +22,15 @@ function rowToItem(row: InventoryRow): FreshInventoryItem {
 }
 
 export async function fetchUserFreshInventory(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  userId?: string
 ): Promise<FreshInventoryItem[]> {
-  const userId = await getAuthUserId(supabase)
+  const uid = userId ?? (await getAuthUserId(supabase))
 
   const { data, error } = await supabase
     .from('fresh_inventory_items')
     .select('id, name, category, quantity, added_at')
-    .eq('user_id', userId)
+    .eq('user_id', uid)
     .order('added_at', { ascending: false })
 
   if (error) throw error

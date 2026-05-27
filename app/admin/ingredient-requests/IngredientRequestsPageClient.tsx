@@ -11,13 +11,12 @@ import {
   type IngredientRequest,
 } from '../../../lib/ingredient-requests'
 import { btnPrimary, fieldInput, pageTitleAccent, surfaceCard, textMuted } from '../../../lib/brand-classes'
-import { createClient } from '../../../lib/supabase/client'
+import { supabase } from '../../../lib/supabase'
 
 const inputClass = fieldInput
 
 export default function IngredientRequestsAdminPage() {
   const { isAdmin, loading: authLoading } = useAuth()
-  const supabase = createClient()
   const [requests, setRequests] = useState<IngredientRequest[]>([])
   const [loading, setLoading] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)

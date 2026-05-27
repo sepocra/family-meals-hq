@@ -42,11 +42,12 @@ function refsFromRow(row: RecipeRow): RecipeIngredientRef[] {
 /** Load fresh ingredients for selected recipes from the current user's recipe bank. */
 export async function fetchFreshIngredientsForRecipes(
   supabase: SupabaseClient,
-  recipeIds: string[]
+  recipeIds: string[],
+  userId?: string
 ): Promise<{ recipeId: string; freshIngredients: RecipeIngredientRef[] }[]> {
   if (recipeIds.length === 0) return []
 
-  const userId = await getAuthUserId(supabase)
+  const uid = userId ?? (await getAuthUserId(supabase))
 
   const { data, error } = await supabase
     .from('recipes')
@@ -61,7 +62,7 @@ export async function fetchFreshIngredientsForRecipes(
         )
       )
     `)
-    .eq('user_id', userId)
+    .eq('user_id', uid)
     .in('id', recipeIds)
 
   if (error) throw error

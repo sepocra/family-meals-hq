@@ -2,13 +2,12 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
-import type { FreshInventoryItem } from '../../lib/fresh-inventory'
+import { useAuth } from '../../components/AuthProvider'
 import {
-  buildShoppingList,
-  buildUnusedInventory,
-  type ShoppingListByCategory,
-} from '../../lib/shopping-list'
-import { fetchFreshIngredientsForRecipes } from '../../lib/shopping-meals'
+  computeShoppingPageState,
+  type ShoppingPageState,
+} from '../../lib/shopping-state'
+import type { ShoppingListByCategory } from '../../lib/shopping-list'
 import { fetchUserFreshInventory } from '../../lib/user-inventory-db'
 import { fetchUserWeeklyMeals } from '../../lib/user-weekly-meals-db'
 import { supabase } from '../../lib/supabase'
@@ -79,115 +78,86 @@ function UnusedInventorySection({
   )
 }
 
-export default function ShoppingListPage() {
-  const [hydrated, setHydrated] = useState(false)
+type ShoppingPageClientProps = {
+  initialState?: ShoppingPageState
+}
+
+export default function ShoppingListPage({
+  initialState,
+}: ShoppingPageClientProps = {}) {
+  const { user } = useAuth()
+  const [hydrated, setHydrated] = useState(initialState !== undefined)
   const [loading, setLoading] = useState(false)
-  const [list, setList] = useState<ShoppingListByCategory>({ produce: [], meat: [] })
-  const [unusedInventory, setUnusedInventory] = useState<ShoppingListByCategory>({
-    produce: [],
-    meat: [],
-  })
-  const [selectedMealCount, setSelectedMealCount] = useState(0)
-  const [loadedMealCount, setLoadedMealCount] = useState(0)
-  const [totalFreshLines, setTotalFreshLines] = useState(0)
-  const [shoppingError, setShoppingError] = useState<string | null>(null)
-  const [pantryOnlyMeals, setPantryOnlyMeals] = useState(false)
-  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null)
+  const [list, setList] = useState<ShoppingListByCategory>(
+    () => initialState?.list ?? { produce: [], meat: [] }
+  )
+  const [unusedInventory, setUnusedInventory] = useState<ShoppingListByCategory>(
+    () => initialState?.unusedInventory ?? { produce: [], meat: [] }
+  )
+  const [selectedMealCount, setSelectedMealCount] = useState(
+    () => initialState?.selectedMealCount ?? 0
+  )
+  const [loadedMealCount, setLoadedMealCount] = useState(
+    () => initialState?.loadedMealCount ?? 0
+  )
+  const [totalFreshLines, setTotalFreshLines] = useState(
+    () => initialState?.totalFreshLines ?? 0
+  )
+  const [shoppingError, setShoppingError] = useState<string | null>(
+    () => initialState?.shoppingError ?? null
+  )
+  const [pantryOnlyMeals, setPantryOnlyMeals] = useState(
+    () => initialState?.pantryOnlyMeals ?? false
+  )
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(
+    () => initialState?.lastRefreshed ?? null
+  )
+
+  function applyShoppingState(state: ShoppingPageState) {
+    setList(state.list)
+    setUnusedInventory(state.unusedInventory)
+    setSelectedMealCount(state.selectedMealCount)
+    setLoadedMealCount(state.loadedMealCount)
+    setTotalFreshLines(state.totalFreshLines)
+    setShoppingError(state.shoppingError)
+    setPantryOnlyMeals(state.pantryOnlyMeals)
+    setLastRefreshed(state.lastRefreshed)
+  }
 
   const recompute = useCallback(async () => {
+    if (!user?.id) return
+
     setLoading(true)
-    setShoppingError(null)
-    setPantryOnlyMeals(false)
-
-    let stored = null
     try {
-      stored = await fetchUserWeeklyMeals(supabase)
-    } catch (err) {
-      console.error(err)
-    }
-
-    let inventory: FreshInventoryItem[] = []
-    try {
-      inventory = await fetchUserFreshInventory(supabase)
-    } catch (err) {
-      console.error(err)
-    }
-
-    const selectedIds = stored?.selectedIds ?? []
-
-    if (!stored?.suggestions.length) {
-      setList({ produce: [], meat: [] })
-      setUnusedInventory({ produce: [], meat: [] })
-      setSelectedMealCount(0)
-      setLoadedMealCount(0)
-      setTotalFreshLines(0)
-      setLastRefreshed(null)
-      setLoading(false)
-      return
-    }
-
-    if (selectedIds.length === 0) {
-      setList({ produce: [], meat: [] })
-      setUnusedInventory({ produce: [], meat: [] })
-      setSelectedMealCount(0)
-      setLoadedMealCount(0)
-      setTotalFreshLines(0)
-      setLastRefreshed(stored.generatedAt)
-      setLoading(false)
-      return
-    }
-
-    setSelectedMealCount(selectedIds.length)
-    setLastRefreshed(stored.generatedAt)
-
-    try {
-      const recipes = await fetchFreshIngredientsForRecipes(supabase, selectedIds)
-      const loadedCount = recipes.length
-      const freshLineCount = recipes.reduce(
-        (sum, r) => sum + r.freshIngredients.length,
-        0
+      const [stored, inventory] = await Promise.all([
+        fetchUserWeeklyMeals(supabase).catch(() => null),
+        fetchUserFreshInventory(supabase, user.id).catch(() => []),
+      ])
+      applyShoppingState(
+        await computeShoppingPageState(supabase, user.id, stored, inventory)
       )
-
-      setLoadedMealCount(loadedCount)
-      setTotalFreshLines(freshLineCount)
-
-      const mealsForShopping = recipes.map((r) => ({
-        freshIngredients: r.freshIngredients,
-      }))
-      setUnusedInventory(buildUnusedInventory(mealsForShopping, inventory))
-
-      if (loadedCount === 0) {
-        setList({ produce: [], meat: [] })
-        setShoppingError(
-          'Selected meals are not in your recipe bank. Open This Week\'s Meals, clear selections, refresh suggestions, and pick your own recipes.'
-        )
-        setLoading(false)
-        return
-      }
-
-      if (freshLineCount === 0) {
-        setList({ produce: [], meat: [] })
-        setPantryOnlyMeals(true)
-        setLoading(false)
-        return
-      }
-
-      setList(buildShoppingList(mealsForShopping, inventory))
     } catch (err) {
       console.error(err)
-      setList({ produce: [], meat: [] })
-      setUnusedInventory({ produce: [], meat: [] })
-      setLoadedMealCount(0)
-      setTotalFreshLines(0)
-      setShoppingError('Could not load ingredients for selected meals.')
+      applyShoppingState({
+        list: { produce: [], meat: [] },
+        unusedInventory: { produce: [], meat: [] },
+        selectedMealCount: 0,
+        loadedMealCount: 0,
+        totalFreshLines: 0,
+        shoppingError: 'Could not load shopping list.',
+        pantryOnlyMeals: false,
+        lastRefreshed: null,
+      })
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
-  }, [])
+  }, [user?.id])
 
   useEffect(() => {
-    recompute()
-    setHydrated(true)
-  }, [recompute])
+    if (initialState !== undefined) return
+    if (!user) return
+    void recompute().finally(() => setHydrated(true))
+  }, [initialState, recompute, user])
 
   const totalNeeded = list.produce.length + list.meat.length
   const allCovered =

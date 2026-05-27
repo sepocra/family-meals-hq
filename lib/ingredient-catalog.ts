@@ -176,6 +176,42 @@ export function classifyIngredientLine(
   }
 }
 
+/** Tries the full line, suggested bank name, and parsed name candidates. */
+export function classifyIngredientLineRelaxed(
+  recipeLine: string,
+  catalog: CatalogIngredient[]
+): ClassifiedIngredientRow {
+  const trimmed = recipeLine.trim()
+  if (!trimmed) return classifyIngredientLine(trimmed, catalog)
+
+  const attempts: string[] = []
+  const seen = new Set<string>()
+  const add = (s: string) => {
+    const key = s.trim().toLowerCase()
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    attempts.push(s.trim())
+  }
+
+  add(trimmed)
+  add(suggestIngredientBankName(trimmed))
+  for (const candidate of extractRecipeNameCandidates(trimmed)) {
+    add(candidate)
+  }
+
+  for (const attempt of attempts) {
+    const result = classifyIngredientLine(attempt, catalog)
+    if (result.catalogId) {
+      return {
+        ...result,
+        name: trimmed,
+      }
+    }
+  }
+
+  return classifyIngredientLine(trimmed, catalog)
+}
+
 export function classifyIngredientRows(
   rows: { name: string; quantity: string; lineText?: string }[],
   catalog: CatalogIngredient[]
@@ -191,7 +227,7 @@ export function classifyIngredientRows(
   return rows.map((row) => {
     const importLineText = row.lineText?.trim() || null
     const matchText = importLineText || row.name.trim()
-    const classified = classifyIngredientLine(matchText, catalog)
+    const classified = classifyIngredientLineRelaxed(matchText, catalog)
     return {
       name: importLineText || row.name.trim(),
       quantity: row.quantity,
