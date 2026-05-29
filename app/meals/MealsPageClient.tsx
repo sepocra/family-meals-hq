@@ -20,7 +20,6 @@ import {
 import {
   formatFreshInventoryMatch,
   formatWeeklyMealsRefreshed,
-  MAX_WEEKLY_MEAL_SELECTIONS,
   rankRecipesByFreshInventory,
   type StoredWeeklyMeals,
   type WeeklyMealSuggestion,
@@ -117,7 +116,6 @@ export default function ThisWeeksMealsPage({
     () => initial?.generatedAt ?? null
   )
   const [refreshing, setRefreshing] = useState(false)
-  const [expandedRecipeIds, setExpandedRecipeIds] = useState<Set<string>>(() => new Set())
   const [mealTypeFilter, setMealTypeFilter] = useState<string[]>([])
   const [hydrated, setHydrated] = useState(initialWeeklyMeals !== undefined)
   const [weeklySnapshot, setWeeklySnapshot] = useState<{
@@ -161,9 +159,7 @@ export default function ThisWeeksMealsPage({
     setSelectedIds((prev) => {
       const next = prev.includes(recipeId)
         ? prev.filter((id) => id !== recipeId)
-        : prev.length >= MAX_WEEKLY_MEAL_SELECTIONS
-          ? prev
-          : [...prev, recipeId]
+        : [...prev, recipeId]
       void persistSelections(next)
       return next
     })
@@ -172,15 +168,6 @@ export default function ThisWeeksMealsPage({
   function clearAllSelections() {
     setSelectedIds([])
     void persistSelections([])
-  }
-
-  function toggleExpandedRecipe(recipeId: string) {
-    setExpandedRecipeIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(recipeId)) next.delete(recipeId)
-      else next.add(recipeId)
-      return next
-    })
   }
 
   const refreshMeals = useCallback(async () => {
@@ -262,7 +249,6 @@ export default function ThisWeeksMealsPage({
 
   const hasRecipes = rankedRecipes.length > 0
   const hasVisibleRecipes = filteredRankedRecipes.length > 0
-  const selectionFull = selectedIds.length >= MAX_WEEKLY_MEAL_SELECTIONS
 
   return (
     <main className="max-w-2xl mx-auto px-6 py-10">
@@ -284,7 +270,7 @@ export default function ThisWeeksMealsPage({
         <Link href="/inventory" className={linkAccent}>
           Fresh Inventory
         </Link>
-        , with meat matches first. Select up to {MAX_WEEKLY_MEAL_SELECTIONS} for your{' '}
+        , with meat matches first. Select meals for your{' '}
         <Link href="/shopping" className={linkAccent}>
           shopping list
         </Link>
@@ -328,7 +314,7 @@ export default function ThisWeeksMealsPage({
           />
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              {selectedIds.length} of {MAX_WEEKLY_MEAL_SELECTIONS} selected for shopping
+              {selectedIds.length} selected for shopping
             </p>
             {selectedIds.length > 0 && (
               <button
@@ -340,27 +326,12 @@ export default function ThisWeeksMealsPage({
               </button>
             )}
           </div>
-          {selectionFull && (
-            <p className="text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-2 mb-4">
-              Maximum {MAX_WEEKLY_MEAL_SELECTIONS} meals selected. Deselect one to choose another.
-            </p>
-          )}
           <div className="flex flex-col gap-3">
             {filteredRankedRecipes.map((recipe) => {
               const selected = selectedIds.includes(recipe.id)
-              const disabled = !selected && selectionFull
               const produceUsed = recipe.produceMatched ?? 0
               const meatUsed = recipe.meatMatched ?? 0
               const displaySourceUrl = sanitizeRecipeSourceUrl(recipe.source_url)
-              const isExpanded = expandedRecipeIds.has(recipe.id)
-              const freshLines =
-                recipe.freshIngredients?.length > 0
-                  ? recipe.freshIngredients.map((item) => {
-                      const quantity = item.quantity?.trim() || ''
-                      const name = item.name?.trim() || ''
-                      return quantity ? `${quantity} ${name}` : name
-                    })
-                  : (recipe.ingredientNames ?? [])
 
               return (
                 <div
@@ -372,11 +343,11 @@ export default function ThisWeeksMealsPage({
                   }`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => toggleExpandedRecipe(recipe.id)}
+                  onClick={() => toggleSelection(recipe.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      toggleExpandedRecipe(recipe.id)
+                      toggleSelection(recipe.id)
                     }
                   }}
                 >
@@ -384,7 +355,6 @@ export default function ThisWeeksMealsPage({
                     <input
                       type="checkbox"
                       checked={selected}
-                      disabled={disabled}
                       onChange={() => toggleSelection(recipe.id)}
                       onClick={(e) => e.stopPropagation()}
                       className="mt-1 shrink-0 rounded border-gray-300 dark:border-gray-600 disabled:opacity-40"
@@ -442,22 +412,6 @@ export default function ThisWeeksMealsPage({
                               {tag}
                             </span>
                           ))}
-                        </div>
-                      )}
-                      {isExpanded && (
-                        <div className="mt-3 rounded-xl border border-border bg-surface px-3 py-2.5">
-                          <p className="text-xs font-medium text-primary mb-1.5">
-                            Fresh ingredients needed
-                          </p>
-                          {freshLines.length > 0 ? (
-                            <ul className="text-xs text-muted space-y-1">
-                              {freshLines.map((line, index) => (
-                                <li key={`${recipe.id}-fresh-${index}`}>{line}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p className="text-xs text-muted">No fresh ingredients listed.</p>
-                          )}
                         </div>
                       )}
                     </div>

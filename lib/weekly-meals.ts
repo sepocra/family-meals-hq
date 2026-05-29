@@ -7,8 +7,6 @@ import {
 
 const STORAGE_KEY = 'family-meals-weekly-suggestions'
 
-export const MAX_WEEKLY_MEAL_SELECTIONS = 4
-
 export type WeeklyMealSuggestion = RankedRecipe
 
 export type StoredWeeklyMeals = {
@@ -55,9 +53,7 @@ export function setSelectedMealIds(selectedIds: string[]): void {
   if (!stored) return
 
   const validIds = new Set(stored.suggestions.map((s) => s.id))
-  const next = [...new Set(selectedIds)]
-    .filter((id) => validIds.has(id))
-    .slice(0, MAX_WEEKLY_MEAL_SELECTIONS)
+  const next = [...new Set(selectedIds)].filter((id) => validIds.has(id))
 
   writeStored({ ...stored, selectedIds: next })
 }
