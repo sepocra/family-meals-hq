@@ -1,8 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { MealTypeFilterBar } from '../../components/MealTypeFilterBar'
 import { mealTypeBadgeClasses } from '../../lib/recipe-tags'
+import { recipeMatchesMealTypeFilter } from '../../lib/recipe-meal-type-filter'
 import { sanitizeRecipeSourceUrl, shortenRecipeUrl } from '../../lib/recipe-url'
 import { getAuthUserId } from '../../lib/auth-user'
 import { btnPrimary, linkAccent, pageTitleAccent, surfaceCard, textMuted } from '../../lib/brand-classes'
@@ -59,12 +61,10 @@ type RecipeRow = {
     ingredients:
       | {
           name: string
-          pantry_type: string | null
           category: string | null
         }
       | {
           name: string
-          pantry_type: string | null
           category: string | null
         }[]
       | null
@@ -78,7 +78,6 @@ function toRecipeForMatching(row: RecipeRow) {
     return {
       name: meta?.name ?? '',
       quantity: ri.quantity?.trim() || null,
-      pantry_type: meta?.pantry_type ?? null,
       category: meta?.category ?? null,
     }
   })
@@ -118,6 +117,8 @@ export default function ThisWeeksMealsPage({
     () => initial?.generatedAt ?? null
   )
   const [refreshing, setRefreshing] = useState(false)
+  const [expandedRecipeIds, setExpandedRecipeIds] = useState<Set<string>>(() => new Set())
+  const [mealTypeFilter, setMealTypeFilter] = useState<string[]>([])
   const [hydrated, setHydrated] = useState(initialWeeklyMeals !== undefined)
   const [weeklySnapshot, setWeeklySnapshot] = useState<{
     generatedAt: string
@@ -173,6 +174,15 @@ export default function ThisWeeksMealsPage({
     void persistSelections([])
   }
 
+  function toggleExpandedRecipe(recipeId: string) {
+    setExpandedRecipeIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(recipeId)) next.delete(recipeId)
+      else next.add(recipeId)
+      return next
+    })
+  }
+
   const refreshMeals = useCallback(async () => {
     setRefreshing(true)
 
@@ -198,7 +208,6 @@ export default function ThisWeeksMealsPage({
           quantity,
           ingredients (
             name,
-            pantry_type,
             category
           )
         )
@@ -243,7 +252,16 @@ export default function ThisWeeksMealsPage({
     setRefreshing(false)
   }, [selectedIds])
 
+  const filteredRankedRecipes = useMemo(
+    () =>
+      rankedRecipes.filter((r) =>
+        recipeMatchesMealTypeFilter(r.meal_types, mealTypeFilter)
+      ),
+    [rankedRecipes, mealTypeFilter]
+  )
+
   const hasRecipes = rankedRecipes.length > 0
+  const hasVisibleRecipes = filteredRankedRecipes.length > 0
   const selectionFull = selectedIds.length >= MAX_WEEKLY_MEAL_SELECTIONS
 
   return (
@@ -290,8 +308,24 @@ export default function ThisWeeksMealsPage({
             Go to Recipe bank
           </Link>
         </div>
+      ) : !hasVisibleRecipes ? (
+        <div className={`${surfaceCard} p-6 text-sm text-primary/80`}>
+          <p className="mb-3">
+            No ranked recipes match the selected meal types. Choose &ldquo;All&rdquo; or
+            another filter.
+          </p>
+          <MealTypeFilterBar
+            selected={mealTypeFilter}
+            onChange={setMealTypeFilter}
+          />
+        </div>
       ) : (
         <>
+          <MealTypeFilterBar
+            selected={mealTypeFilter}
+            onChange={setMealTypeFilter}
+            className="mb-4"
+          />
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <p className="text-sm text-gray-600 dark:text-gray-300">
               {selectedIds.length} of {MAX_WEEKLY_MEAL_SELECTIONS} selected for shopping
@@ -312,21 +346,39 @@ export default function ThisWeeksMealsPage({
             </p>
           )}
           <div className="flex flex-col gap-3">
-            {rankedRecipes.map((recipe) => {
+            {filteredRankedRecipes.map((recipe) => {
               const selected = selectedIds.includes(recipe.id)
               const disabled = !selected && selectionFull
               const produceUsed = recipe.produceMatched ?? 0
               const meatUsed = recipe.meatMatched ?? 0
               const displaySourceUrl = sanitizeRecipeSourceUrl(recipe.source_url)
+              const isExpanded = expandedRecipeIds.has(recipe.id)
+              const freshLines =
+                recipe.freshIngredients?.length > 0
+                  ? recipe.freshIngredients.map((item) => {
+                      const quantity = item.quantity?.trim() || ''
+                      const name = item.name?.trim() || ''
+                      return quantity ? `${quantity} ${name}` : name
+                    })
+                  : (recipe.ingredientNames ?? [])
 
               return (
                 <div
                   key={recipe.id}
-                  className={`${surfaceCard} p-5 transition-colors ${
+                  className={`${surfaceCard} p-5 transition-colors cursor-pointer ${
                     selected
                       ? 'border-coral ring-1 ring-coral'
                       : 'hover:border-muted'
                   }`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleExpandedRecipe(recipe.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      toggleExpandedRecipe(recipe.id)
+                    }
+                  }}
                 >
                   <div className="flex items-start gap-3">
                     <input
@@ -334,6 +386,7 @@ export default function ThisWeeksMealsPage({
                       checked={selected}
                       disabled={disabled}
                       onChange={() => toggleSelection(recipe.id)}
+                      onClick={(e) => e.stopPropagation()}
                       className="mt-1 shrink-0 rounded border-gray-300 dark:border-gray-600 disabled:opacity-40"
                       aria-label={
                         selected
@@ -352,6 +405,7 @@ export default function ThisWeeksMealsPage({
                           href={displaySourceUrl}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
                           className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 underline underline-offset-2 mb-2 inline-block max-w-full truncate"
                           title={displaySourceUrl}
                         >
@@ -388,6 +442,22 @@ export default function ThisWeeksMealsPage({
                               {tag}
                             </span>
                           ))}
+                        </div>
+                      )}
+                      {isExpanded && (
+                        <div className="mt-3 rounded-xl border border-border bg-surface px-3 py-2.5">
+                          <p className="text-xs font-medium text-primary mb-1.5">
+                            Fresh ingredients needed
+                          </p>
+                          {freshLines.length > 0 ? (
+                            <ul className="text-xs text-muted space-y-1">
+                              {freshLines.map((line, index) => (
+                                <li key={`${recipe.id}-fresh-${index}`}>{line}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-xs text-muted">No fresh ingredients listed.</p>
+                          )}
                         </div>
                       )}
                     </div>

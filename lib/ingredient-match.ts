@@ -109,13 +109,41 @@ function stripLeadingDescriptors(text: string): string {
   return s
 }
 
-/** Plural pairs only (tomato/tomatoes) — not prefix matches (corn/cornflour). */
-function namesEquivalent(a: string, b: string): boolean {
-  if (a === b) return true
-  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a]
+/**
+ * True when two single-word names are the same ingredient (tomato/tomatoes).
+ * Whole-word only — does not match prefixes (corn ≠ cornflour).
+ */
+export function ingredientNamesEquivalent(a: string, b: string): boolean {
+  const x = a.trim().toLowerCase()
+  const y = b.trim().toLowerCase()
+  if (!x || !y) return false
+  if (x === y) return true
+
+  const [shorter, longer] = x.length <= y.length ? [x, y] : [y, x]
   if (longer === `${shorter}s` || longer === `${shorter}es`) return true
   if (shorter.endsWith('y') && longer === `${shorter.slice(0, -1)}ies`) return true
+
+  const vesFromSingular = shorter.endsWith('fe')
+    ? `${shorter.slice(0, -2)}ves`
+    : shorter.endsWith('f')
+      ? `${shorter.slice(0, -1)}ves`
+      : null
+  if (vesFromSingular && longer === vesFromSingular) return true
+
+  if (longer.endsWith('ves')) {
+    const stem = longer.slice(0, -3)
+    if (shorter === `${stem}f` || shorter === `${stem}fe`) return true
+  }
+
   return false
+}
+
+/** Multi-word names with per-word singular/plural (chicken thigh ↔ chicken thighs). */
+export function ingredientPhrasesEquivalent(a: string, b: string): boolean {
+  const wordsA = a.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const wordsB = b.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (wordsA.length !== wordsB.length || wordsA.length === 0) return false
+  return wordsA.every((word, i) => ingredientNamesEquivalent(word, wordsB[i]!))
 }
 
 /**
@@ -139,7 +167,14 @@ export function recipeContainsPhrase(text: string, phrase: string): boolean {
     return `${esc}(?:s|es)?`
   })
 
-  return new RegExp(`\\b${parts.join('\\s+')}\\b`, 'i').test(text.trim().toLowerCase())
+  const normalizedText = text.trim().toLowerCase()
+  if (new RegExp(`\\b${parts.join('\\s+')}\\b`, 'i').test(normalizedText)) return true
+
+  for (const candidate of extractRecipeNameCandidates(normalizedText)) {
+    if (ingredientPhrasesEquivalent(candidate, phraseNorm)) return true
+  }
+
+  return false
 }
 
 /** Core ingredient phrases from a recipe line (e.g. "carrots, chopped" → "carrots"). */
@@ -191,7 +226,12 @@ export function ingredientsMatchExactly(
   if (boundaryPattern.test(recipe)) return true
 
   for (const candidate of extractRecipeNameCandidates(recipeIngredient)) {
-    if (namesEquivalent(inventory, candidate)) return true
+    if (
+      ingredientNamesEquivalent(inventory, candidate) ||
+      ingredientPhrasesEquivalent(inventory, candidate)
+    ) {
+      return true
+    }
 
     if (candidate.includes(' ')) {
       const phraseBoundary = new RegExp(

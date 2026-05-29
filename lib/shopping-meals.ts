@@ -10,12 +10,10 @@ type RecipeIngredientRow = {
   ingredients:
     | {
         name: string
-        pantry_type: string | null
         category: string | null
       }
     | {
         name: string
-        pantry_type: string | null
         category: string | null
       }[]
     | null
@@ -33,7 +31,6 @@ function refsFromRow(row: RecipeRow): RecipeIngredientRef[] {
     return {
       name: meta?.name ?? '',
       quantity: ri.quantity?.trim() || null,
-      pantry_type: meta?.pantry_type ?? null,
       category: meta?.category ?? null,
     }
   })
@@ -57,7 +54,6 @@ export async function fetchFreshIngredientsForRecipes(
         quantity,
         ingredients (
           name,
-          pantry_type,
           category
         )
       )

@@ -12,6 +12,7 @@ import {
   createIngredientInBank,
   fetchIngredientCatalog,
   INGREDIENT_BANK_CATEGORIES,
+  isPantryCategory,
   suggestIngredientBankName,
   type CatalogIngredient,
   type IngredientBankCategory,
@@ -21,6 +22,7 @@ import {
   fetchPendingIngredientRequestNames,
   normalizeRequestName,
 } from '../../lib/ingredient-requests'
+import { MealTypeFilterBar } from '../../components/MealTypeFilterBar'
 import { useAuth } from '../../components/AuthProvider'
 import { getAuthUserId } from '../../lib/auth-user'
 import {
@@ -34,6 +36,7 @@ import {
 import { isMeatIngredient } from '../../lib/ingredient-category'
 import type { RecipeListItem } from '../../lib/recipe-list'
 import { RECIPE_LIST_SELECT } from '../../lib/recipe-list'
+import { recipeMatchesMealTypeFilter } from '../../lib/recipe-meal-type-filter'
 import {
   DIETARY_TAGS,
   MEAL_TYPE_TAGS,
@@ -50,7 +53,6 @@ type RecipeIngredient = {
   ingredient_id?: string | null
   ingredients: {
     name: string
-    pantry_type: string | null
     category: string | null
   } | null
 }
@@ -86,21 +88,19 @@ type RecipeRow = {
     ingredients:
       | {
           name: string
-          pantry_type: string | null
           category: string | null
         }
       | {
           name: string
-          pantry_type: string | null
           category: string | null
         }[]
       | null
   }[]
 }
 
-const RECIPE_WITH_INGREDIENTS_SELECT = `${RECIPE_LIST_SELECT}, recipe_ingredients (quantity, display_name, ingredient_id, ingredients (name, pantry_type, category))`
+const RECIPE_WITH_INGREDIENTS_SELECT = `${RECIPE_LIST_SELECT}, recipe_ingredients (quantity, display_name, ingredient_id, ingredients (name, category))`
 
-const RECIPE_WITH_INGREDIENTS_SELECT_LEGACY = `${RECIPE_LIST_SELECT}, recipe_ingredients (quantity, ingredient_id, ingredients (name, pantry_type, category))`
+const RECIPE_WITH_INGREDIENTS_SELECT_LEGACY = `${RECIPE_LIST_SELECT}, recipe_ingredients (quantity, ingredient_id, ingredients (name, category))`
 
 type RecipeSort = 'date-desc' | 'date-asc' | 'name-asc' | 'name-desc'
 
@@ -139,10 +139,10 @@ function isDisplayNameSchemaError(error: { message?: string } | null): boolean {
 }
 
 const RECIPE_INGREDIENT_LINK_SELECT =
-  'quantity, display_name, ingredient_id, ingredients (name, pantry_type, category)'
+  'quantity, display_name, ingredient_id, ingredients (name, category)'
 
 const RECIPE_INGREDIENT_LINK_SELECT_LEGACY =
-  'quantity, ingredient_id, ingredients (name, pantry_type, category)'
+  'quantity, ingredient_id, ingredients (name, category)'
 
 function normalizeRecipeIngredientRows(
   rows: NonNullable<RecipeRow['recipe_ingredients']>
@@ -928,28 +928,46 @@ function RecipeBankCard({
 }: RecipeBankCardProps) {
   const longPress = useLongPress(onEnterSelection)
   const displaySourceUrl = sanitizeRecipeSourceUrl(recipe.source_url)
+  const [showFreshIngredients, setShowFreshIngredients] = useState(false)
+
+  const freshIngredients = recipe.recipe_ingredients
+    .map((ri) => {
+      const name = ri.display_name?.trim() || ri.ingredients?.name?.trim() || ''
+      const quantity = ri.quantity?.trim() || ''
+      const category = ri.ingredients?.category ?? null
+      if (!name) return null
+      if (isPantryCategory(category)) return null
+      return quantity ? `${quantity} ${name}` : name
+    })
+    .filter((line): line is string => Boolean(line))
 
   const handleClick = () => {
     if (longPress.consumeLongPress()) return
-    if (selectionMode) onToggleSelect()
+    if (selectionMode) {
+      onToggleSelect()
+      return
+    }
+    setShowFreshIngredients((prev) => !prev)
   }
 
   return (
     <div
-      role={selectionMode ? 'button' : undefined}
-      tabIndex={selectionMode ? 0 : undefined}
+      role="button"
+      tabIndex={0}
       onKeyDown={
-        selectionMode
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
+        (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            if (selectionMode) {
                 onToggleSelect()
+              } else {
+                setShowFreshIngredients((prev) => !prev)
               }
-            }
-          : undefined
+          }
+        }
       }
       className={`${surfaceCard} p-5 transition-colors touch-manipulation ${
-        selectionMode ? 'cursor-pointer select-none' : 'hover:border-muted'
+        selectionMode ? 'cursor-pointer select-none' : 'cursor-pointer hover:border-muted'
       } ${selectionMode && selected ? 'border-coral ring-1 ring-coral' : ''}`}
       onPointerDown={longPress.onPointerDown}
       onPointerUp={longPress.onPointerUp}
@@ -1034,6 +1052,21 @@ function RecipeBankCard({
               ))}
             </div>
           )}
+
+          {showFreshIngredients && !selectionMode && (
+            <div className="mt-3 rounded-xl border border-border bg-surface px-3 py-2.5">
+              <p className="text-xs font-medium text-primary mb-1.5">Fresh ingredients needed</p>
+              {freshIngredients.length > 0 ? (
+                <ul className="text-xs text-muted space-y-1">
+                  {freshIngredients.map((line, index) => (
+                    <li key={`${recipe.id}-fresh-${index}`}>{line}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted">No fresh ingredients added yet.</p>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1060,6 +1093,7 @@ export default function Home({
     }))
   )
   const [recipeSort, setRecipeSort] = useState<RecipeSort>('date-desc')
+  const [mealTypeFilter, setMealTypeFilter] = useState<string[]>([])
   const [loading, setLoading] = useState(() => !serverPrefetched)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -1207,21 +1241,31 @@ export default function Home({
   }
 
   async function loadRecipes(uid: string) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('recipes')
-      .select(RECIPE_LIST_SELECT)
+      .select(
+        supportsRecipeDisplayName
+          ? RECIPE_WITH_INGREDIENTS_SELECT
+          : RECIPE_WITH_INGREDIENTS_SELECT_LEGACY
+      )
       .eq('user_id', uid)
+
+    let { data, error } = await query
+
+    if (error && supportsRecipeDisplayName && isDisplayNameSchemaError(error)) {
+      setSupportsRecipeDisplayName(false)
+      const retry = await supabase
+        .from('recipes')
+        .select(RECIPE_WITH_INGREDIENTS_SELECT_LEGACY)
+        .eq('user_id', uid)
+      data = retry.data
+      error = retry.error
+    }
+
     if (error) {
       console.error(error)
     } else {
-      setRecipes(
-        (data ?? []).map((recipe) => ({
-          ...recipe,
-          meal_types: recipe.meal_types ?? [],
-          source_url: sanitizeRecipeSourceUrl(recipe.source_url),
-          recipe_ingredients: [],
-        }))
-      )
+      setRecipes(normalizeRecipes((data ?? []) as RecipeRow[]))
     }
     setLoading(false)
   }
@@ -2194,9 +2238,14 @@ export default function Home({
     setBatchDeleting(false)
   }
 
+  const filteredRecipes = useMemo(
+    () => recipes.filter((r) => recipeMatchesMealTypeFilter(r.meal_types, mealTypeFilter)),
+    [recipes, mealTypeFilter]
+  )
+
   const sortedRecipes = useMemo(
-    () => sortRecipes(recipes, recipeSort),
-    [recipes, recipeSort]
+    () => sortRecipes(filteredRecipes, recipeSort),
+    [filteredRecipes, recipeSort]
   )
 
   const formPanelProps = {
@@ -2413,26 +2462,35 @@ export default function Home({
       {loading && <p className="text-muted text-sm">Loading recipes...</p>}
 
       {!loading && recipes.length > 0 && (
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-4 min-w-0">
-          <label
-            htmlFor="recipe-sort"
-            className="text-sm text-muted shrink-0"
-          >
-            Sort by
-          </label>
-          <select
-            id="recipe-sort"
-            value={recipeSort}
-            onChange={(e) => setRecipeSort(e.target.value as RecipeSort)}
-            className={`${inputClass} sm:max-w-xs`}
-          >
-            {RECIPE_SORT_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+        <div className="flex flex-col gap-4 mb-4 min-w-0">
+          <MealTypeFilterBar selected={mealTypeFilter} onChange={setMealTypeFilter} />
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <label
+              htmlFor="recipe-sort"
+              className="text-sm text-muted shrink-0"
+            >
+              Sort by
+            </label>
+            <select
+              id="recipe-sort"
+              value={recipeSort}
+              onChange={(e) => setRecipeSort(e.target.value as RecipeSort)}
+              className={`${inputClass} sm:max-w-xs`}
+            >
+              {RECIPE_SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
+      )}
+
+      {!loading && recipes.length > 0 && sortedRecipes.length === 0 && (
+        <p className="text-sm text-muted mb-4">
+          No recipes match the selected meal types. Choose &ldquo;All&rdquo; or another filter.
+        </p>
       )}
 
       <div className="flex flex-col gap-3">

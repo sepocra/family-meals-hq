@@ -28,7 +28,7 @@ export type MealForShopping = {
 
 /**
  * Ingredients required by selected meals that are not covered by fresh inventory.
- * Uses recipe-bank pantry_type / category; pantry staples are excluded.
+ * Uses recipe-bank category; pantry staples are excluded.
  */
 export function buildShoppingList(
   meals: MealForShopping[],

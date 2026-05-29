@@ -6,7 +6,6 @@ import { shoppingCategoryForIngredient } from './ingredient-pantry'
 export type RecipeIngredientRef = {
   name: string
   quantity?: string | null
-  pantry_type?: string | null
   category?: string | null
 }
 
@@ -32,7 +31,6 @@ export function freshIngredientRefs(
     .map((i) => ({
       name: i.name.trim(),
       quantity: i.quantity?.trim() || null,
-      pantry_type: i.pantry_type ?? null,
       category: i.category ?? null,
     }))
 }
@@ -51,7 +49,6 @@ function freshLines(recipe: RecipeForMatching): RecipeIngredientRef[] {
   return recipe.ingredientNames.map((name) => ({
     name,
     quantity: null,
-    pantry_type: null,
     category: null,
   }))
 }

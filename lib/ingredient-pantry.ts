@@ -2,21 +2,12 @@ import {
   isFreshCategory,
   isMeatCategory,
   isPantryCategory,
-  type CatalogIngredient,
 } from './ingredient-catalog'
 import { categoryForIngredientName, type InventoryCategory } from './ingredient-category'
 
 /** Metadata from the ingredients table. */
 export type IngredientPantryMeta = {
-  pantry_type?: string | null
   category?: string | null
-}
-
-/** Pantry staples are not shopped or tracked in Fresh Inventory. */
-export function isPantryStaple(meta: IngredientPantryMeta): boolean {
-  if (meta.pantry_type === 'always') return true
-  if (meta.category === 'pantry') return true
-  return false
 }
 
 const PANTRY_NAME_KEYWORDS = [
@@ -108,11 +99,6 @@ export function isPantryIngredient(
   if (meta?.category != null) {
     return isPantryCategory(meta.category)
   }
-  if (meta?.pantry_type === 'always') return true
-  if (meta?.pantry_type === 'explicit') return false
-  if (meta?.pantry_type === 'usually') {
-    return isPantryCategory(meta.category)
-  }
   return isPantryStapleByName(name)
 }
 
@@ -138,22 +124,9 @@ export function shoppingCategoryForIngredient(
   if (cat === 'protein') return 'meat'
   if (cat === 'vegetable') return 'produce'
 
-  if (meta?.category != null || meta?.pantry_type != null) {
+  if (meta?.category != null) {
     return 'produce'
   }
 
   return categoryForIngredientName(name)
-}
-
-export function categoryFieldsForSection(
-  isPantry: boolean,
-  existing?: CatalogIngredient | IngredientPantryMeta | null
-): { category: string; pantry_type: string } {
-  if (isPantry) {
-    return { pantry_type: 'always', category: 'pantry' }
-  }
-  if (existing && isMeatCategory('category' in existing ? existing.category : null)) {
-    return { pantry_type: 'explicit', category: 'meat' }
-  }
-  return { pantry_type: 'explicit', category: 'fresh' }
 }

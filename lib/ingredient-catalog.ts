@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   extractRecipeNameCandidates,
+  ingredientNamesEquivalent,
+  ingredientPhrasesEquivalent,
   ingredientsMatchExactly,
   recipeContainsPhrase,
 } from './ingredient-match'
@@ -9,7 +11,6 @@ export type CatalogIngredient = {
   id: string
   name: string
   category: string | null
-  pantry_type: string | null
 }
 
 const APPROVED_MULTIPLE_SPLIT = /\s*\/\s*|\s+and\/or\s+/gi
@@ -42,14 +43,6 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function namesEquivalent(a: string, b: string): boolean {
-  if (a === b) return true
-  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a]
-  if (longer === `${shorter}s` || longer === `${shorter}es`) return true
-  if (shorter.endsWith('y') && longer === `${shorter.slice(0, -1)}ies`) return true
-  return false
-}
-
 /** Catalog name (or an approved multiple) appears in the recipe line. */
 export function phraseContainedInRecipe(
   recipeLine: string,
@@ -69,7 +62,12 @@ export function phraseContainedInRecipe(
 
   for (const candidate of extractRecipeNameCandidates(recipeLine)) {
     if (recipeContainsPhrase(candidate, phraseNorm)) return true
-    if (namesEquivalent(candidate, phraseNorm)) return true
+    if (
+      ingredientNamesEquivalent(candidate, phraseNorm) ||
+      ingredientPhrasesEquivalent(candidate, phraseNorm)
+    ) {
+      return true
+    }
     if (candidate === phraseNorm) return true
   }
 
@@ -85,6 +83,14 @@ export function catalogEntryMatchesRecipeLine(
   for (const segment of approvedNameSegments(catalogName)) {
     if (segment !== catalogName.trim().toLowerCase()) {
       if (phraseContainedInRecipe(recipeLine, segment)) return true
+    }
+    for (const candidate of extractRecipeNameCandidates(recipeLine)) {
+      if (
+        ingredientNamesEquivalent(candidate, segment) ||
+        ingredientPhrasesEquivalent(candidate, segment)
+      ) {
+        return true
+      }
     }
   }
 
@@ -255,17 +261,14 @@ export function suggestIngredientBankName(recipeLine: string): string {
   return extractRecipeNameCandidates(trimmed)[0] ?? trimmed
 }
 
-function dbFieldsForBankCategory(category: IngredientBankCategory): {
-  category: string
-  pantry_type: string
-} {
+function dbCategoryForBankCategory(category: IngredientBankCategory): string {
   switch (category) {
     case 'pantry':
-      return { category: 'pantry', pantry_type: 'always' }
+      return 'pantry'
     case 'meat':
-      return { category: 'meat', pantry_type: 'explicit' }
+      return 'meat'
     case 'fresh':
-      return { category: 'fresh', pantry_type: 'explicit' }
+      return 'fresh'
   }
 }
 
@@ -281,9 +284,9 @@ export async function createIngredientInBank(
     .from('ingredients')
     .insert({
       name: trimmed,
-      ...dbFieldsForBankCategory(category),
+      category: dbCategoryForBankCategory(category),
     })
-    .select('id, name, category, pantry_type')
+    .select('id, name, category')
     .single()
 
   if (error) {
@@ -299,7 +302,7 @@ export async function fetchIngredientCatalog(
 ): Promise<CatalogIngredient[]> {
   const { data, error } = await supabase
     .from('ingredients')
-    .select('id, name, category, pantry_type')
+    .select('id, name, category')
     .order('name')
 
   if (error) throw error

@@ -5,13 +5,15 @@ export const DIETARY_TAGS = [
   'Toddler-friendly',
 ] as const
 
-export const MEAL_TYPE_TAGS = ['Dinner', 'Snack', 'Dessert'] as const
+export const MEAL_TYPE_TAGS = ['Dinner', 'Sides', 'Snack', 'Dessert'] as const
 
 export type MealTypeTag = (typeof MEAL_TYPE_TAGS)[number]
 
 const mealTypeBadgeClass: Record<MealTypeTag, string> = {
   Dinner:
     'bg-indigo-50 text-indigo-800 border-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800',
+  Sides:
+    'bg-teal-50 text-teal-800 border-teal-100 dark:bg-teal-900/30 dark:text-teal-300 dark:border-teal-800',
   Snack:
     'bg-amber-50 text-amber-800 border-amber-100 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800',
   Dessert:
@@ -21,6 +23,8 @@ const mealTypeBadgeClass: Record<MealTypeTag, string> = {
 const mealTypeToggleClass: Record<MealTypeTag, string> = {
   Dinner:
     'bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300 dark:border-indigo-800',
+  Sides:
+    'bg-teal-100 text-teal-800 border-teal-200 dark:bg-teal-900/40 dark:text-teal-300 dark:border-teal-800',
   Snack:
     'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800',
   Dessert:
